@@ -18,5 +18,5 @@ This repository is a public fork used as the browser-side foundation for UAIOS_0
 ## Safety and privacy
 - Never commit secrets, credentials, cookies, session tokens, ChatGPT auth headers, webhook secrets, or private company data.
 - This public fork must stay provider-agnostic and safe to publish.
-- Any Practika/UAIOS private endpoint, credential, routing rule, or confidential state belongs in the private control-plane repository/configuration, not here.
+- Any private UAIOS endpoint, credential, routing rule, or confidential state belongs in the private control-plane repository/configuration, not here.
 - Network export of conversation content must be disabled by default and require explicit opt-in.
