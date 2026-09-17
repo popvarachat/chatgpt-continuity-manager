@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.3.3
+// @version      1.3.4
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9027,13 +9027,28 @@
       .filter((url) => url && url.origin === location.origin);
     const exact = candidates.find((url) => normalizePath(url.pathname) === preferredLandingPath);
     if (exact) return exact.href;
-    const projectOnly = candidates.find((url) => {
-      const candidatePath = normalizePath(url.pathname);
-      return candidatePath.startsWith(`${targetPath}/`) && !/\/c\/[0-9a-f-]{16,}/i.test(candidatePath);
-    });
-    return projectOnly?.href || uaiosContinuityProjectLandingUrl(scope);
+    return uaiosContinuityProjectLandingUrl(scope);
   }
+  function uaiosContinuityRecoverProjectLanding() {
+    if (isConversationPage() || uaiosContinuityScopeId() !== 'general') return false;
+    const pending = uaiosContinuityReadPendingRollovers();
+    const now = Date.now();
+    const candidates = Object.values(pending).filter((record) => {
+      const createdAt = Date.parse(record?.created_at || '');
+      return Number.isFinite(createdAt) && now - createdAt <= UAIOS_PENDING_ROLLOVER_TTL_MS
+        && /^https:\/\/chatgpt\.com\/g\/g-p-[^/]+\/project(?:[?#].*)?$/i.test(String(record?.project_href || ''));
+    }).sort((a,b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+    const record = candidates[0];
+    if (!record || Number(record.redirect_attempts || 0) >= 1) return false;
+    record.redirect_attempts = Number(record.redirect_attempts || 0) + 1;
+    pending[record.scope] = record;
+    uaiosContinuityWriteObject(UAIOS_PENDING_ROLLOVERS_KEY, pending);
+    location.replace(record.project_href);
+    return true;
+  }
+
   async function uaiosContinuityApplyPendingRollover() {
+    if (uaiosContinuityRecoverProjectLanding()) return false;
     const pending = uaiosContinuityGetPendingRollover();
     if (!pending || isConversationPage()) return false;
     if (!uaiosContinuityFillComposer(pending.bootstrap)) return false;
@@ -9061,6 +9076,7 @@
         source_conversation_id: checkpoint.source_conversation_id,
         source_url: location.href,
         project_href: projectHref,
+        redirect_attempts: 0,
         bootstrap
       });
       try {
@@ -9073,7 +9089,10 @@
         sourceConversationId: record.source_conversation_id
       });
       const targetUrl = record.project_href || uaiosContinuityProjectLandingUrl(record.scope);
-      if (newTab) newTab.location.href = targetUrl;
+      if (newTab) {
+        try { newTab.location.replace(targetUrl); }
+        catch (_) { newTab.location.href = targetUrl; }
+      }
       else uaiosContinuitySetPanelNote('Popup blocked. Bootstrap copied; open a fresh chat in this Project.', 'warn');
       return record;
     } catch (error) {
