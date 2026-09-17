@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.3.0
+// @version      1.3.1
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9011,6 +9011,22 @@
     if (!scope || scope === 'general' || scope === '/') return `${location.origin}/`;
     return new URL(scope, location.origin).href;
   }
+
+  function uaiosContinuityDiscoverProjectLandingHref(scope = uaiosContinuityScopeId()) {
+    if (!scope || scope === 'general' || scope === '/') return `${location.origin}/`;
+    const normalizePath = (value) => String(value || '').replace(/\/+$/, '') || '/';
+    const targetPath = normalizePath(scope);
+    const candidates = Array.from(document.querySelectorAll('a[href]'))
+      .map((anchor) => { try { return new URL(anchor.href, location.href); } catch (_) { return null; } })
+      .filter((url) => url && url.origin === location.origin);
+    const exact = candidates.find((url) => normalizePath(url.pathname) === targetPath);
+    if (exact) return exact.href;
+    const projectOnly = candidates.find((url) => {
+      const candidatePath = normalizePath(url.pathname);
+      return candidatePath.startsWith(`${targetPath}/`) && !/\/c\/[0-9a-f-]{16,}/i.test(candidatePath);
+    });
+    return projectOnly?.href || uaiosContinuityProjectLandingUrl(scope);
+  }
   async function uaiosContinuityApplyPendingRollover() {
     const pending = uaiosContinuityGetPendingRollover();
     if (!pending || isConversationPage()) return false;
@@ -9032,10 +9048,13 @@
     try {
       const checkpoint = await uaiosContinuityCheckpointNow();
       const bootstrap = uaiosContinuityBuildBootstrap(checkpoint);
+      const projectHref = uaiosContinuityDiscoverProjectLandingHref(checkpoint.scope);
       const record = uaiosContinuitySetPendingRollover({
         scope: checkpoint.scope,
         created_at: new Date().toISOString(),
         source_conversation_id: checkpoint.source_conversation_id,
+        source_url: location.href,
+        project_href: projectHref,
         bootstrap
       });
       try {
@@ -9047,7 +9066,7 @@
         scope: record.scope,
         sourceConversationId: record.source_conversation_id
       });
-      const targetUrl = uaiosContinuityProjectLandingUrl(record.scope);
+      const targetUrl = record.project_href || uaiosContinuityProjectLandingUrl(record.scope);
       if (newTab) newTab.location.href = targetUrl;
       else uaiosContinuitySetPanelNote('Popup blocked. Bootstrap copied; open a fresh chat in this Project.', 'warn');
       return record;

@@ -6,14 +6,17 @@ const source = fs.readFileSync(path.join(root, 'chatgpt-conversation-handoff-exp
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8').replace(/^\uFEFF/, ''));
 
-assert.match(source, /@version\s+1\.3\.0/);
-assert.equal(manifest.version, '1.3.0');
+assert.match(source, /@version\s+1\.3\.1/);
+assert.equal(manifest.version, '1.3.1');
 assert.equal(manifest.content_scripts[0].world, 'MAIN');
 assert.match(source, /UAIOS_AUTO_CHECKPOINT_MS = 10 \* 60 \* 1000/);
 assert.match(source, /document\.visibilityState !== 'visible'/);
 assert.match(source, /New Chat Handoff/);
 assert.match(source, /uaiosContinuityPrepareRollover/);
 assert.match(source, /uaiosContinuityApplyPendingRollover/);
+assert.match(source, /uaiosContinuityDiscoverProjectLandingHref/);
+assert.match(source, /project_href: projectHref/);
+assert.match(source, /record\.project_href \|\| uaiosContinuityProjectLandingUrl/);
 assert.match(source, /total_content_chars/);
 assert.match(readme, /heuristic conversation load/i);
 assert.match(readme, /not an OpenAI token meter/i);
@@ -23,4 +26,4 @@ const applyEnd = source.indexOf('async function uaiosContinuityPrepareRollover',
 const applyBody = source.slice(applyStart, applyEnd);
 assert.ok(applyStart > 0 && applyEnd > applyStart);
 assert.doesNotMatch(applyBody, /\.click\(|requestSubmit\(|dispatchEvent\([^)]*submit/i, 'resume must never auto-send');
-console.log('v1.3 continuity static tests: PASS');
+console.log('v1.3.1 continuity static tests: PASS');
