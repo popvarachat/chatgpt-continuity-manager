@@ -1,16 +1,16 @@
 // ==UserScript==
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
-// @name:en      ChatGPT Conversation Handoff Exporter
-// @namespace    https://github.com/SunnyLeu/ChatGPT-Conversation-Handoff-Exporter
-// @version      1.2.0
+// @name:en      ChatGPT Continuity Manager (UAIOS fork)
+// @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
+// @version      1.2.1
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
-// @description:en Export the current ChatGPT conversation as raw or handoff JSON, with independent batch sessions, appendable queues, item removal and deferred ZIP packaging.
+// @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
 // @license      MIT
-// @homepageURL  https://github.com/SunnyLeu/ChatGPT-Conversation-Handoff-Exporter
-// @supportURL   https://github.com/SunnyLeu/ChatGPT-Conversation-Handoff-Exporter/issues
-// @updateURL    https://raw.githubusercontent.com/SunnyLeu/ChatGPT-Conversation-Handoff-Exporter/main/chatgpt-conversation-handoff-exporter.user.js
-// @downloadURL  https://raw.githubusercontent.com/SunnyLeu/ChatGPT-Conversation-Handoff-Exporter/main/chatgpt-conversation-handoff-exporter.user.js
+// @homepageURL  https://github.com/popvarachat/chatgpt-continuity-manager
+// @supportURL   https://github.com/popvarachat/chatgpt-continuity-manager/issues
+// @updateURL    https://raw.githubusercontent.com/popvarachat/chatgpt-continuity-manager/main/chatgpt-conversation-handoff-exporter.user.js
+// @downloadURL  https://raw.githubusercontent.com/popvarachat/chatgpt-continuity-manager/main/chatgpt-conversation-handoff-exporter.user.js
 // @match        https://chatgpt.com/*
 // @run-at       document-start
 // @grant        none
@@ -8550,6 +8550,209 @@
   /*
    * 啟動 UI 相關邏輯。
    */
+  // ============================================================
+  // UAIOS_08A - UI continuity watchdog (local-only, opt-in)
+  // ============================================================
+  const UAIOS_WATCHDOG_ENABLED_KEY = 'uaios.continuity.watchdog.enabled.v1';
+  const UAIOS_WATCHDOG_EVENTS_KEY = 'uaios.continuity.watchdog.events.v1';
+  const UAIOS_WATCHDOG_MAX_ACTIONS = 3;
+  const UAIOS_WATCHDOG_WINDOW_MS = 15 * 60 * 1000;
+  const UAIOS_WATCHDOG_COOLDOWN_MS = 15 * 1000;
+  const UAIOS_WATCHDOG_SCAN_MS = 2500;
+  const UAIOS_WATCHDOG_RETRY_LABELS = [
+    'retry', 'try again',
+    '\u0e17\u0e33\u0e0b\u0e49\u0e33',
+    '\u0e25\u0e2d\u0e07\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07'
+  ];
+  const UAIOS_WATCHDOG_CONTINUE_LABELS = [
+    'continue generating', 'keep generating',
+    '\u0e14\u0e33\u0e40\u0e19\u0e34\u0e19\u0e01\u0e32\u0e23\u0e15\u0e48\u0e2d'
+  ];
+  const UAIOS_WATCHDOG_ERROR_MARKERS = [
+    'timed out', 'timeout', 'something went wrong', 'network error',
+    'error generating', 'there was an error',
+    '\u0e2b\u0e21\u0e14\u0e40\u0e27\u0e25\u0e32',
+    '\u0e40\u0e01\u0e34\u0e14\u0e02\u0e49\u0e2d\u0e1c\u0e34\u0e14\u0e1e\u0e25\u0e32\u0e14'
+  ];
+  let uaiosWatchdogObserver = null;
+  let uaiosWatchdogTimer = null;
+  let uaiosWatchdogPending = false;
+  let uaiosWatchdogLastActionAt = 0;
+  function uaiosWatchdogIsEnabled() {
+    try {
+      return localStorage.getItem(UAIOS_WATCHDOG_ENABLED_KEY) === 'true';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function uaiosWatchdogSetEnabled(enabled) {
+    localStorage.setItem(UAIOS_WATCHDOG_ENABLED_KEY, enabled ? 'true' : 'false');
+    uaiosWatchdogRecordEvent(enabled ? 'enabled' : 'disabled');
+    if (enabled) {
+      uaiosWatchdogScanNow();
+    }
+    return uaiosWatchdogStatus();
+  }
+
+  function uaiosWatchdogNormalizeText(element) {
+    if (!element) return '';
+    const text = [
+      element.getAttribute?.('aria-label') || '',
+      element.getAttribute?.('title') || '',
+      element.innerText || '',
+      element.textContent || ''
+    ].join(' ');
+    return text.toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  function uaiosWatchdogMatchesAny(text, patterns) {
+    return patterns.some((pattern) => text.includes(pattern));
+  }
+  function uaiosWatchdogIsClickable(element) {
+    if (!element || !element.isConnected) return false;
+    if (element.disabled || element.getAttribute?.('aria-disabled') === 'true') return false;
+    const rect = element.getBoundingClientRect?.();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    const style = window.getComputedStyle?.(element);
+    return !style || (style.visibility !== 'hidden' && style.display !== 'none');
+  }
+
+  function uaiosWatchdogNearbyText(element) {
+    let node = element;
+    for (let depth = 0; node && depth < 6; depth += 1, node = node.parentElement) {
+      const text = (node.innerText || node.textContent || '').toLowerCase();
+      if (text.length >= 30) {
+        return text.slice(-6000);
+      }
+    }
+    return '';
+  }
+
+  function uaiosWatchdogScopeKey() {
+    return getConversationIdFromUrl() || location.pathname || 'unknown';
+  }
+
+  function uaiosWatchdogReadEvents() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(UAIOS_WATCHDOG_EVENTS_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  }
+  function uaiosWatchdogRecordEvent(type, details = {}) {
+    const events = uaiosWatchdogReadEvents();
+    events.push({
+      at: new Date().toISOString(),
+      type,
+      scope: uaiosWatchdogScopeKey(),
+      ...details
+    });
+    try {
+      localStorage.setItem(UAIOS_WATCHDOG_EVENTS_KEY, JSON.stringify(events.slice(-50)));
+    } catch (_) {
+      // Logging must never interfere with ChatGPT.
+    }
+  }
+
+  function uaiosWatchdogBudgetAvailable(action) {
+    const now = Date.now();
+    const cutoff = now - UAIOS_WATCHDOG_WINDOW_MS;
+    const scope = uaiosWatchdogScopeKey();
+    const recent = uaiosWatchdogReadEvents().filter((event) => {
+      const eventTime = Date.parse(event.at || '');
+      return event.type === 'auto_click' && event.action === action &&
+        event.scope === scope && Number.isFinite(eventTime) && eventTime >= cutoff;
+    });
+    return recent.length < UAIOS_WATCHDOG_MAX_ACTIONS;
+  }
+
+  function uaiosWatchdogFindCandidate(action) {
+    const labels = action === 'retry'
+      ? UAIOS_WATCHDOG_RETRY_LABELS
+      : UAIOS_WATCHDOG_CONTINUE_LABELS;
+    for (const element of document.querySelectorAll('button, [role="button"]')) {
+      if (!uaiosWatchdogIsClickable(element)) continue;
+      const text = uaiosWatchdogNormalizeText(element);
+      if (!text || !uaiosWatchdogMatchesAny(text, labels)) continue;
+      if (action === 'retry') {
+        const nearby = uaiosWatchdogNearbyText(element);
+        if (!uaiosWatchdogMatchesAny(nearby, UAIOS_WATCHDOG_ERROR_MARKERS)) continue;
+      }
+      return element;
+    }
+    return null;
+  }
+  function uaiosWatchdogQueueClick(element, action) {
+    const now = Date.now();
+    if (uaiosWatchdogPending) return false;
+    if (now - uaiosWatchdogLastActionAt < UAIOS_WATCHDOG_COOLDOWN_MS) return false;
+    if (!uaiosWatchdogBudgetAvailable(action)) {
+      uaiosWatchdogRecordEvent('budget_exhausted', { action });
+      return false;
+    }
+    uaiosWatchdogPending = true;
+    window.setTimeout(() => {
+      try {
+        if (!uaiosWatchdogIsEnabled() || !uaiosWatchdogIsClickable(element)) return;
+        const text = uaiosWatchdogNormalizeText(element);
+        const expectedLabels = action === 'retry'
+          ? UAIOS_WATCHDOG_RETRY_LABELS
+          : UAIOS_WATCHDOG_CONTINUE_LABELS;
+        if (!uaiosWatchdogMatchesAny(text, expectedLabels)) return;
+        if (action === 'retry') {
+          const nearby = uaiosWatchdogNearbyText(element);
+          if (!uaiosWatchdogMatchesAny(nearby, UAIOS_WATCHDOG_ERROR_MARKERS)) return;
+        }
+        element.click();
+        uaiosWatchdogLastActionAt = Date.now();
+        uaiosWatchdogRecordEvent('auto_click', { action, label: text.slice(0, 160) });
+      } finally {
+        uaiosWatchdogPending = false;
+      }
+    }, 1800);
+    return true;
+  }
+
+  function uaiosWatchdogScanNow() {
+    if (!uaiosWatchdogIsEnabled() || uaiosWatchdogPending) return false;
+    if (!isConversationPage()) return false;
+    const retry = uaiosWatchdogFindCandidate('retry');
+    if (retry) return uaiosWatchdogQueueClick(retry, 'retry');
+    const continuation = uaiosWatchdogFindCandidate('continue');
+    if (continuation) return uaiosWatchdogQueueClick(continuation, 'continue');
+    return false;
+  }
+  function uaiosWatchdogStatus() {
+    return {
+      enabled: uaiosWatchdogIsEnabled(),
+      scope: uaiosWatchdogScopeKey(),
+      pending: uaiosWatchdogPending,
+      recentEvents: uaiosWatchdogReadEvents().slice(-10)
+    };
+  }
+
+  function startContinuityWatchdog() {
+    if (uaiosWatchdogTimer) return;
+    const root = document.body || document.documentElement;
+    if (!root) return;
+    uaiosWatchdogObserver = new MutationObserver(() => {
+      if (uaiosWatchdogIsEnabled()) uaiosWatchdogScanNow();
+    });
+    uaiosWatchdogObserver.observe(root, { childList: true, subtree: true });
+    uaiosWatchdogTimer = window.setInterval(uaiosWatchdogScanNow, UAIOS_WATCHDOG_SCAN_MS);
+    window.UAIOSContinuity = Object.freeze({
+      enable: () => uaiosWatchdogSetEnabled(true),
+      disable: () => uaiosWatchdogSetEnabled(false),
+      status: uaiosWatchdogStatus,
+      scanNow: uaiosWatchdogScanNow,
+      recentEvents: () => uaiosWatchdogReadEvents().slice(-50)
+    });
+    uaiosWatchdogRecordEvent('watchdog_loaded', { enabled: uaiosWatchdogIsEnabled() });
+    if (uaiosWatchdogIsEnabled()) uaiosWatchdogScanNow();
+  }
+
   function startUi() {
     if (uiStarted) {
       return;
@@ -8559,6 +8762,7 @@
     installTitleObserver();
     ensureButtonsSoon();
     ensureBatchUi();
+    startContinuityWatchdog();
     startLightPolling();
   }
   // ============================================================

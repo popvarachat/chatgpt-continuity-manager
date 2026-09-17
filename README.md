@@ -369,3 +369,24 @@ textdocs 內容只會在使用者按下 **下載原始 JSON** 或 **下載交接
 ## License
 
 MIT
+
+## UAIOS continuity fork additions
+
+This fork adds an opt-in, local-only UI continuity watchdog for recoverable ChatGPT conversation interruptions.
+
+The watchdog is disabled by default. After installing this forked userscript, enable it once from the ChatGPT browser console:
+
+```js
+UAIOSContinuity.enable()
+```
+
+Useful commands:
+
+```js
+UAIOSContinuity.status()
+UAIOSContinuity.scanNow()
+UAIOSContinuity.recentEvents()
+UAIOSContinuity.disable()
+```
+
+Safety behavior: it only runs on conversation pages, requires an explicit Retry/Try again or Continue-generating style control, rate-limits automatic clicks, keeps only a small local event log, and does not send continuity data to any external service. External UAIOS/n8n synchronization is intentionally not part of this phase.
