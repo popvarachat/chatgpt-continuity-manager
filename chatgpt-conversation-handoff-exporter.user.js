@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.3.1
+// @version      1.3.2
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8764,6 +8764,8 @@
       const trimmed = String(value || '').replace(/\/+$/, '');
       return !trimmed || trimmed === '/' ? 'general' : trimmed;
     };
+    const conversationRoute = path.match(/^(.*)\/c\/[^/]+(?:\/.*)?$/);
+    if (conversationRoute) return normalize(conversationRoute[1]);
     const conversationId = getConversationIdFromUrl();
     if (conversationId) {
       const marker = `/c/${conversationId}`;
