@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.3.4
+// @version      1.4.0
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8934,6 +8934,9 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
+  const UAIOS_CONTINUITY_VERSION = '1.4.0';
+  const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
+  const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_CONTINUITY_PANEL_ID = 'uaios-continuity-panel';
   const UAIOS_CONTINUITY_STYLE_ID = 'uaios-continuity-style';
   const UAIOS_AUTO_CHECKPOINT_MS = 10 * 60 * 1000;
@@ -8950,6 +8953,22 @@
     else if (messages >= 140 || chars >= 220000) level = 'high';
     else if (messages >= 80 || chars >= 100000) level = 'elevated';
     return { level, messages, chars };
+  }
+
+  function uaiosContinuityBridgeRequest(type, payload = {}, timeoutMs = 1800) {
+    const requestId = `uaios-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => { if (settled) return; settled = true; window.removeEventListener('message', onMessage); resolve(value); };
+      const onMessage = (event) => {
+        const message = event.data;
+        if (event.source !== window || !message || message.source !== UAIOS_BRIDGE_REPLY_SOURCE || message.request_id !== requestId) return;
+        finish(message.ok ? message.record ?? true : null);
+      };
+      window.addEventListener('message', onMessage);
+      window.postMessage({ source: UAIOS_BRIDGE_MAIN_SOURCE, request_id: requestId, type, ...payload }, location.origin);
+      window.setTimeout(() => finish(null), timeoutMs);
+    });
   }
 
   function uaiosContinuityReadPendingRollovers() {
@@ -9049,10 +9068,15 @@
 
   async function uaiosContinuityApplyPendingRollover() {
     if (uaiosContinuityRecoverProjectLanding()) return false;
-    const pending = uaiosContinuityGetPendingRollover();
+    let pending = uaiosContinuityGetPendingRollover();
+    if (!pending) {
+      const bridged = await uaiosContinuityBridgeRequest('getPending');
+      if (bridged && bridged.scope === uaiosContinuityScopeId()) pending = bridged;
+    }
     if (!pending || isConversationPage()) return false;
     if (!uaiosContinuityFillComposer(pending.bootstrap)) return false;
     uaiosContinuityClearPendingRollover(pending.scope);
+    void uaiosContinuityBridgeRequest('clearPending');
     uaiosWatchdogRecordEvent('rollover_bootstrap_applied', {
       scope: pending.scope,
       sourceConversationId: pending.source_conversation_id
@@ -9079,6 +9103,7 @@
         redirect_attempts: 0,
         bootstrap
       });
+      await uaiosContinuityBridgeRequest('savePending', { record });
       try {
         await navigator.clipboard?.writeText?.(bootstrap);
       } catch (_) {
@@ -9210,6 +9235,7 @@
       panel.id = UAIOS_CONTINUITY_PANEL_ID;
       panel.innerHTML = `
         <button type="button" data-uaios-action="toggle">Continuity OFF</button>
+        <span data-uaios-version>v${UAIOS_CONTINUITY_VERSION}</span>
         <span data-uaios-load="normal">Load: unknown</span>
         <button type="button" data-uaios-action="checkpoint">Checkpoint</button>
         <button type="button" data-uaios-action="handoff">New Chat Handoff</button>

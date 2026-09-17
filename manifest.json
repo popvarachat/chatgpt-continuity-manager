@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Continuity Manager",
-  "version": "1.3.4",
+  "version": "1.4.0",
   "description": "Local continuity tools for ChatGPT: handoff export, guarded retry/continue recovery, and bounded checkpoints.",
   "host_permissions": [
     "https://chatgpt.com/*"
@@ -12,10 +12,23 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "continuity-storage-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
         "chatgpt-conversation-handoff-exporter.user.js"
       ],
       "run_at": "document_start",
       "world": "MAIN"
     }
+  ],
+  "permissions": [
+    "storage"
   ]
 }
