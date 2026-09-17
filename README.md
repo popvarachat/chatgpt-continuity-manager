@@ -390,3 +390,24 @@ UAIOSContinuity.disable()
 ```
 
 Safety behavior: it only runs on conversation pages, requires an explicit Retry/Try again or Continue-generating style control, rate-limits automatic clicks, keeps only a small local event log, and does not send continuity data to any external service. External UAIOS/n8n synchronization is intentionally not part of this phase.
+
+### Local continuity checkpoints
+
+The fork can also save a bounded local checkpoint for the current conversation. It reuses the upstream validated handoff acquisition path, then stores only the latest 12 messages (each bounded), textdoc metadata, and optional structured project state in browser localStorage.
+
+```js
+UAIOSContinuity.setState({
+  phase: 'A06',
+  current_task: 'Validate staging router',
+  next_action: 'Run acceptance test',
+  blockers: [],
+  decisions: ['GitHub is canonical evidence']
+})
+
+await UAIOSContinuity.checkpointNow()
+UAIOSContinuity.latestCheckpoint()
+UAIOSContinuity.buildBootstrap()
+await UAIOSContinuity.copyBootstrap()
+```
+
+The bootstrap explicitly tells the next chat to verify mutable external state from canonical sources instead of trusting stale branch/PR/workflow status from the old conversation. Checkpoints remain local to the browser and no external synchronization is performed in this phase.
