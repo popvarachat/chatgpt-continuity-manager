@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.5.4
+// @version      1.5.5
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8938,7 +8938,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.5.4';
+  const UAIOS_CONTINUITY_VERSION = '1.5.5';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -8947,6 +8947,7 @@
   const UAIOS_CONTINUITY_STYLE_ID = 'uaios-continuity-style';
   const UAIOS_AUTO_CHECKPOINT_MS = 10 * 60 * 1000;
   const UAIOS_PENDING_ROLLOVER_TTL_MS = 30 * 60 * 1000;
+  const UAIOS_STAGED_HANDOFF_WAIT_MS = 4000;
   let uaiosAutoCheckpointTimer = null;
   let uaiosCheckpointInFlight = false;
   let uaiosPanelNoteTimer = null;
@@ -9118,6 +9119,10 @@
       if (bridged && bridged.scope === uaiosContinuityScopeId()) pending = bridged;
     }
     if (!pending || isConversationPage()) return false;
+    if (pending.handoff_state === 'staged') {
+      const createdAt = Date.parse(pending.created_at || '');
+      if (Number.isFinite(createdAt) && Date.now() - createdAt < UAIOS_STAGED_HANDOFF_WAIT_MS) return false;
+    }
     if (!uaiosContinuityFillComposer(pending.bootstrap)) return false;
     uaiosContinuityClearPendingRollover(pending.scope);
     void uaiosContinuityBridgeRequest('clearPending');
@@ -9129,7 +9134,21 @@
     return true;
   }
 
-  async function uaiosContinuityPrepareRollover(preopenedTab = null) {
+  function uaiosContinuityStageRollover() {
+    const checkpoint = uaiosContinuityLatestCheckpoint();
+    if (!checkpoint) return null;
+    const projectHref = uaiosContinuityDiscoverProjectLandingHref(checkpoint.scope);
+    const record = uaiosContinuitySetPendingRollover({
+      scope: checkpoint.scope, created_at: new Date().toISOString(),
+      source_conversation_id: checkpoint.source_conversation_id, source_url: location.href,
+      project_href: projectHref, redirect_attempts: 0, bootstrap: uaiosContinuityBuildBootstrap(checkpoint),
+      handoff_state: 'staged', handoff_id: `handoff-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    });
+    void uaiosContinuityBridgeRequest('savePending', { record }, 1200);
+    return record;
+  }
+
+  async function uaiosContinuityPrepareRollover(preopenedTab = null, stagedRecord = null) {
     if (uaiosCheckpointInFlight) return null;
     uaiosCheckpointInFlight = true;
     uaiosContinuityRenderPanel();
@@ -9139,12 +9158,14 @@
       const projectHref = uaiosContinuityDiscoverProjectLandingHref(checkpoint.scope);
       const record = uaiosContinuitySetPendingRollover({
         scope: checkpoint.scope,
-        created_at: new Date().toISOString(),
+        created_at: stagedRecord?.created_at || new Date().toISOString(),
         source_conversation_id: checkpoint.source_conversation_id,
         source_url: location.href,
         project_href: projectHref,
-        redirect_attempts: 0,
-        bootstrap
+        redirect_attempts: Number(stagedRecord?.redirect_attempts || 0),
+        bootstrap,
+        handoff_state: 'ready',
+        handoff_id: stagedRecord?.handoff_id || `handoff-${Date.now()}-${Math.random().toString(36).slice(2)}`
       });
       await uaiosContinuityBridgeRequest('savePending', { record });
       try {
@@ -9266,13 +9287,17 @@
     if (action === 'handoff') {
       let preopenedTab = null;
       try {
-        const preopenTarget = uaiosContinuityDiscoverProjectLandingHref(uaiosContinuityScopeId());
-        preopenedTab = window.open(preopenTarget, '_blank');
+        const stagedRecord = uaiosContinuityStageRollover();
+        if (!stagedRecord) {
+          uaiosContinuitySetPanelNote('No validated checkpoint yet. Save Checkpoint once, then retry Handoff.', 'warn');
+          return;
+        }
+        preopenedTab = window.open(stagedRecord.project_href, '_blank');
         if (preopenedTab) {
           try { preopenedTab.opener = null; } catch (_) {}
         }
-        uaiosContinuitySetPanelNote('Preparing checkpoint and handoff…', 'info');
-        await uaiosContinuityPrepareRollover(preopenedTab);
+        uaiosContinuitySetPanelNote('Handoff staged locally; refreshing checkpoint…', 'info');
+        await uaiosContinuityPrepareRollover(preopenedTab, stagedRecord);
       } catch (error) {
         try { if (preopenedTab && !preopenedTab.closed) preopenedTab.close(); } catch (_) {}
         uaiosContinuitySetPanelNote(`Handoff failed: ${toErrorMessage(error)}`, 'error');
