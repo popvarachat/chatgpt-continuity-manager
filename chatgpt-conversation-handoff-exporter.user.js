@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.2.2
+// @version      1.2.3
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8562,7 +8562,9 @@
   const UAIOS_WATCHDOG_RETRY_LABELS = [
     'retry', 'try again',
     '\u0e17\u0e33\u0e0b\u0e49\u0e33',
-    '\u0e25\u0e2d\u0e07\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07'
+    '\u0e25\u0e2d\u0e07\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07',
+    '\u0e25\u0e2d\u0e07\u0e43\u0e2b\u0e21\u0e48',
+    '\u0e42\u0e1b\u0e23\u0e14\u0e25\u0e2d\u0e07\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07'
   ];
   const UAIOS_WATCHDOG_CONTINUE_LABELS = [
     'continue generating', 'keep generating',
@@ -8572,6 +8574,7 @@
     'timed out', 'timeout', 'something went wrong', 'network error',
     'error generating', 'there was an error',
     '\u0e2b\u0e21\u0e14\u0e40\u0e27\u0e25\u0e32',
+    '\u0e2b\u0e21\u0e14\u0e40\u0e27\u0e25\u0e32\u0e08\u0e31\u0e14\u0e2a\u0e48\u0e07\u0e02\u0e49\u0e2d\u0e04\u0e27\u0e32\u0e21',
     '\u0e40\u0e01\u0e34\u0e14\u0e02\u0e49\u0e2d\u0e1c\u0e34\u0e14\u0e1e\u0e25\u0e32\u0e14'
   ];
   let uaiosWatchdogObserver = null;
