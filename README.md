@@ -411,3 +411,17 @@ await UAIOSContinuity.copyBootstrap()
 ```
 
 The bootstrap explicitly tells the next chat to verify mutable external state from canonical sources instead of trusting stale branch/PR/workflow status from the old conversation. Checkpoints remain local to the browser and no external synchronization is performed in this phase.
+
+### Chrome unpacked extension installation
+
+This fork can be loaded directly in current Chrome without Tampermonkey.
+
+1. Open `chrome://extensions/`.
+2. Enable **Developer mode**.
+3. Choose **Load unpacked**.
+4. Select the repository folder containing `manifest.json`.
+5. Refresh any open `chatgpt.com` tabs.
+
+The extension runs the userscript in Chrome's `MAIN` world at `document_start`, which is required because the upstream exporter observes ChatGPT's page-level fetch/request context. No background service worker, external endpoint, or credential is included.
+
+After loading, the continuity API is available on ChatGPT pages as `window.UAIOSContinuity`. The watchdog remains disabled until `UAIOSContinuity.enable()` is explicitly called.
