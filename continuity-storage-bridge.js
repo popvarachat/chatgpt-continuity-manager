@@ -2,8 +2,11 @@
   'use strict';
 
   const STORAGE_KEY = 'uaios.continuity.pendingRollover.bridge.v1';
+  const ACTIVE_TAB_KEY = 'uaios.continuity.activeHandoffTab.v1';
   const MAIN_SOURCE = 'uaios-continuity-main-v1';
   const BRIDGE_SOURCE = 'uaios-continuity-bridge-v1';
+  const REQUEST_EVENT = 'uaios-continuity-bridge-request';
+  const REPLY_EVENT = 'uaios-continuity-bridge-reply';
   const TTL_MS = 30 * 60 * 1000;
 
   function isFresh(record) {
@@ -24,7 +27,6 @@
     }
     return record;
   }
-
   async function maybeRecoverProjectLanding() {
     const path = location.pathname || '/';
     if (path !== '/') return false;
@@ -37,9 +39,18 @@
     return true;
   }
 
-  window.addEventListener('message', async (event) => {
-    if (event.source !== window) return;
-    const message = event.data;
+  function emitReply(message) {
+    try {
+      window.postMessage(message, location.origin);
+    } catch (_) {}
+    try {
+      document.dispatchEvent(new CustomEvent(REPLY_EVENT, {
+        detail: JSON.stringify(message)
+      }));
+    } catch (_) {}
+  }
+
+  async function handleMessage(message) {
     if (!message || message.source !== MAIN_SOURCE || !message.request_id) return;
 
     let ok = true;
@@ -51,20 +62,38 @@
       } else if (message.type === 'getPending') {
         record = await readPending();
       } else if (message.type === 'clearPending') {
-        await chrome.storage.local.remove(STORAGE_KEY);
+        await chrome.storage.local.remove([STORAGE_KEY, ACTIVE_TAB_KEY]);
+      } else if (message.type === 'openHandoffTab') {
+        record = message.record;
+        const response = await chrome.runtime.sendMessage({
+          type: 'uaios-open-handoff-tab',
+          record
+        });
+        ok = Boolean(response?.ok);
+        if (ok && response?.result) record = { ...record, ...response.result };
       } else {
         ok = false;
       }
     } catch (_) {
       ok = false;
     }
-
-    window.postMessage({
+    emitReply({
       source: BRIDGE_SOURCE,
       request_id: message.request_id,
       ok,
       record
-    }, location.origin);
+    });
+  }
+
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    void handleMessage(event.data);
+  });
+
+  document.addEventListener(REQUEST_EVENT, (event) => {
+    try {
+      void handleMessage(JSON.parse(String(event.detail || '{}')));
+    } catch (_) {}
   });
 
   void maybeRecoverProjectLanding();

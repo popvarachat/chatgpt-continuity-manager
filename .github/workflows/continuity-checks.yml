@@ -17,7 +17,10 @@ jobs:
         with:
           node-version: '24'
       - name: Syntax check
-        run: node --check chatgpt-conversation-handoff-exporter.user.js
+        run: |
+          node --check chatgpt-conversation-handoff-exporter.user.js
+          node --check continuity-storage-bridge.js
+          node --check background.js
       - name: Continuity tests
         run: node tests/v130-continuity-static.test.cjs
       - name: Manifest parse
