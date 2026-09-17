@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.2.1
+// @version      1.2.2
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8733,6 +8733,190 @@
     };
   }
 
+  // ============================================================
+  // UAIOS_08B/08D - bounded local checkpoint and handoff capsule
+  // ============================================================
+  const UAIOS_CHECKPOINTS_KEY = 'uaios.continuity.checkpoints.v1';
+  const UAIOS_PROJECT_STATES_KEY = 'uaios.continuity.projectStates.v1';
+  const UAIOS_CHECKPOINT_MESSAGE_LIMIT = 12;
+  const UAIOS_CHECKPOINT_MESSAGE_CHARS = 4000;
+  const UAIOS_CHECKPOINT_ARRAY_LIMIT = 50;
+
+  function uaiosContinuityReadObject(key) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(key) || '{}');
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function uaiosContinuityWriteObject(key, value) {
+    localStorage.setItem(key, JSON.stringify(value));
+  }
+
+  function uaiosContinuityScopeId() {
+    const path = location.pathname || '';
+    const conversationId = getConversationIdFromUrl();
+    if (conversationId) {
+      const marker = `/c/${conversationId}`;
+      const index = path.lastIndexOf(marker);
+      if (index >= 0) return path.slice(0, index) || 'general';
+    }
+    return path || 'general';
+  }
+  function uaiosContinuityBoundString(value, maxChars = UAIOS_CHECKPOINT_MESSAGE_CHARS) {
+    if (value == null) return '';
+    const text = String(value);
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, maxChars)}\n...[truncated]`;
+  }
+
+  function uaiosContinuityBoundArray(value) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(-UAIOS_CHECKPOINT_ARRAY_LIMIT).map((item) => {
+      if (typeof item === 'string') return uaiosContinuityBoundString(item, 2000);
+      if (item && typeof item === 'object') {
+        try {
+          return JSON.parse(JSON.stringify(item));
+        } catch (_) {
+          return String(item);
+        }
+      }
+      return item;
+    });
+  }
+
+  function uaiosContinuitySanitizeState(input = {}) {
+    return {
+      phase: uaiosContinuityBoundString(input.phase, 300),
+      progress: uaiosContinuityBoundString(input.progress, 100),
+      current_task: uaiosContinuityBoundString(input.current_task ?? input.currentTask, 2000),
+      next_action: uaiosContinuityBoundString(input.next_action ?? input.nextAction, 2000),
+      completed: uaiosContinuityBoundArray(input.completed),
+      blockers: uaiosContinuityBoundArray(input.blockers),
+      decisions: uaiosContinuityBoundArray(input.decisions),
+      evidence: uaiosContinuityBoundArray(input.evidence),
+      notes: uaiosContinuityBoundString(input.notes, 4000),
+      updated_at: new Date().toISOString()
+    };
+  }
+  function uaiosContinuityGetState() {
+    const states = uaiosContinuityReadObject(UAIOS_PROJECT_STATES_KEY);
+    return states[uaiosContinuityScopeId()] || null;
+  }
+
+  function uaiosContinuitySetState(patch = {}) {
+    const states = uaiosContinuityReadObject(UAIOS_PROJECT_STATES_KEY);
+    const scope = uaiosContinuityScopeId();
+    const current = states[scope] || {};
+    states[scope] = uaiosContinuitySanitizeState({ ...current, ...patch });
+    uaiosContinuityWriteObject(UAIOS_PROJECT_STATES_KEY, states);
+    uaiosWatchdogRecordEvent('project_state_saved', { scope });
+    return states[scope];
+  }
+
+  function uaiosContinuityLatestCheckpoint() {
+    const checkpoints = uaiosContinuityReadObject(UAIOS_CHECKPOINTS_KEY);
+    return checkpoints[uaiosContinuityScopeId()] || null;
+  }
+
+  function uaiosContinuitySaveCheckpointRecord(record) {
+    const checkpoints = uaiosContinuityReadObject(UAIOS_CHECKPOINTS_KEY);
+    checkpoints[record.scope] = record;
+    uaiosContinuityWriteObject(UAIOS_CHECKPOINTS_KEY, checkpoints);
+    uaiosWatchdogRecordEvent('checkpoint_saved', {
+      scope: record.scope,
+      conversationId: record.source_conversation_id,
+      totalMessages: record.total_message_count
+    });
+    return record;
+  }
+  async function uaiosContinuityCheckpointNow() {
+    const conversationId = getConversationIdFromUrl();
+    if (!conversationId || !isConversationPage()) {
+      throw new Error('Checkpoint requires an active ChatGPT conversation page.');
+    }
+    const result = await createHandoffPayloadForConversationId(conversationId, {
+      enforceCurrentPage: true
+    });
+    const handoff = JSON.parse(result.handoffPayload.text);
+    const allMessages = Array.isArray(handoff.messages) ? handoff.messages : [];
+    const recentMessages = allMessages.slice(-UAIOS_CHECKPOINT_MESSAGE_LIMIT).map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: uaiosContinuityBoundString(message.content),
+      cite_sources: Array.isArray(message.cite_sources)
+        ? message.cite_sources.slice(0, 20)
+        : undefined
+    }));
+    const textdocs = Array.isArray(handoff.textdocs)
+      ? handoff.textdocs.slice(0, 50).map((doc) => ({
+        id: doc.id ?? null,
+        title: doc.title ?? null,
+        version: doc.version ?? null,
+        updated_at: doc.updated_at ?? null
+      }))
+      : [];
+    const record = {
+      schema_version: 1,
+      scope: uaiosContinuityScopeId(),
+      captured_at: new Date().toISOString(),
+      source_conversation_id: handoff.conversation_id || conversationId,
+      title: handoff.title || null,
+      source_update_time: handoff.update_time || null,
+      total_message_count: allMessages.length,
+      recent_messages: recentMessages,
+      textdocs,
+      project_state: uaiosContinuityGetState(),
+      transport: result.transport || null
+    };
+    return uaiosContinuitySaveCheckpointRecord(record);
+  }
+  function uaiosContinuityBuildBootstrap(checkpoint = uaiosContinuityLatestCheckpoint()) {
+    if (!checkpoint) return null;
+    const payload = {
+      schema_version: checkpoint.schema_version,
+      scope: checkpoint.scope,
+      captured_at: checkpoint.captured_at,
+      source_conversation_id: checkpoint.source_conversation_id,
+      title: checkpoint.title,
+      source_update_time: checkpoint.source_update_time,
+      total_message_count: checkpoint.total_message_count,
+      project_state: checkpoint.project_state || null,
+      recent_messages: checkpoint.recent_messages || [],
+      textdocs: checkpoint.textdocs || []
+    };
+    return [
+      'UAIOS CONTINUITY BOOTSTRAP',
+      'Use this checkpoint as continuity context. Verify mutable external state from canonical sources before acting.',
+      'Do not assume old branch/PR/workflow status is still current solely because it appears below.',
+      '',
+      JSON.stringify(payload, null, 2)
+    ].join('\n');
+  }
+
+  async function uaiosContinuityCopyBootstrap() {
+    const text = uaiosContinuityBuildBootstrap();
+    if (!text) throw new Error('No checkpoint exists for the current continuity scope.');
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+      throw new Error('Clipboard API is unavailable. Use UAIOSContinuity.buildBootstrap() instead.');
+    }
+    await navigator.clipboard.writeText(text);
+    uaiosWatchdogRecordEvent('bootstrap_copied', { scope: uaiosContinuityScopeId() });
+    return text;
+  }
+
+  function uaiosContinuityClearCheckpoint() {
+    const checkpoints = uaiosContinuityReadObject(UAIOS_CHECKPOINTS_KEY);
+    const scope = uaiosContinuityScopeId();
+    const existed = Object.prototype.hasOwnProperty.call(checkpoints, scope);
+    delete checkpoints[scope];
+    uaiosContinuityWriteObject(UAIOS_CHECKPOINTS_KEY, checkpoints);
+    if (existed) uaiosWatchdogRecordEvent('checkpoint_cleared', { scope });
+    return existed;
+  }
+
   function startContinuityWatchdog() {
     if (uaiosWatchdogTimer) return;
     const root = document.body || document.documentElement;
@@ -8747,7 +8931,15 @@
       disable: () => uaiosWatchdogSetEnabled(false),
       status: uaiosWatchdogStatus,
       scanNow: uaiosWatchdogScanNow,
-      recentEvents: () => uaiosWatchdogReadEvents().slice(-50)
+      recentEvents: () => uaiosWatchdogReadEvents().slice(-50),
+      scopeId: uaiosContinuityScopeId,
+      getState: uaiosContinuityGetState,
+      setState: uaiosContinuitySetState,
+      checkpointNow: uaiosContinuityCheckpointNow,
+      latestCheckpoint: uaiosContinuityLatestCheckpoint,
+      buildBootstrap: uaiosContinuityBuildBootstrap,
+      copyBootstrap: uaiosContinuityCopyBootstrap,
+      clearCheckpoint: uaiosContinuityClearCheckpoint
     });
     uaiosWatchdogRecordEvent('watchdog_loaded', { enabled: uaiosWatchdogIsEnabled() });
     if (uaiosWatchdogIsEnabled()) uaiosWatchdogScanNow();

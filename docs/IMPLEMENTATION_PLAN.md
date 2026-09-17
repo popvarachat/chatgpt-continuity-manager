@@ -48,3 +48,10 @@ Acceptance: browser-side module works fully local when the adapter is disabled, 
 - Keep `upstream` remote pointed at `SunnyLeu/ChatGPT-Conversation-Handoff-Exporter`.
 - Sync upstream only through a dedicated branch/PR.
 - Re-run continuity tests after every upstream sync because DOM/API behavior is not a stable public contract.
+
+## Implementation status
+- Phase 0: merged on `main`.
+- Phase 1: merged on `main` as opt-in local UI watchdog.
+- Phase 2A: current implementation adds bounded local structured state, validated on-demand checkpoint capture, and bootstrap text generation/copy.
+- Phase 2B remains: move larger/full snapshots to IndexedDB if needed and add import/export recovery tooling.
+- Automatic rollover remains deferred until checkpoint behavior is validated in real ChatGPT Project usage.
