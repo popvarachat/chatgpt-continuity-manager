@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.5.2
+// @version      1.5.3
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8938,7 +8938,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.5.2';
+  const UAIOS_CONTINUITY_VERSION = '1.5.3';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9129,7 +9129,7 @@
     return true;
   }
 
-  async function uaiosContinuityPrepareRollover() {
+  async function uaiosContinuityPrepareRollover(preopenedTab = null) {
     if (uaiosCheckpointInFlight) return null;
     uaiosCheckpointInFlight = true;
     uaiosContinuityRenderPanel();
@@ -9157,7 +9157,16 @@
         sourceConversationId: record.source_conversation_id
       });
       const targetUrl = record.project_href || uaiosContinuityProjectLandingUrl(record.scope);
-      const opened = await uaiosContinuityBridgeRequest('openHandoffTab', { record }, 5000);
+      let opened = false;
+      if (preopenedTab && !preopenedTab.closed) {
+        try {
+          preopenedTab.location.replace(targetUrl);
+          preopenedTab.opener = null;
+          opened = true;
+          uaiosContinuitySetPanelNote('Handoff tab opened. Waiting for bootstrap hydration.', 'success');
+        } catch (_) {}
+      }
+      if (!opened) opened = Boolean(await uaiosContinuityBridgeRequest('openHandoffTab', { record }, 5000));
       if (!opened) {
         const fallbackTab = window.open(targetUrl, '_blank', 'noopener');
         if (!fallbackTab) uaiosContinuitySetPanelNote('Browser handoff controller unavailable. Bootstrap copied; open a fresh chat in this Project.', 'warn');
@@ -9259,9 +9268,19 @@
       return;
     }
     if (action === 'handoff') {
+      let preopenedTab = null;
       try {
-        await uaiosContinuityPrepareRollover();
+        preopenedTab = window.open('about:blank', '_blank');
+        if (preopenedTab) {
+          try {
+            preopenedTab.document.title = 'Preparing ChatGPT handoff…';
+            preopenedTab.document.body.textContent = 'Preparing continuity handoff…';
+          } catch (_) {}
+        }
+        uaiosContinuitySetPanelNote('Preparing checkpoint and handoff…', 'info');
+        await uaiosContinuityPrepareRollover(preopenedTab);
       } catch (error) {
+        try { if (preopenedTab && !preopenedTab.closed) preopenedTab.close(); } catch (_) {}
         uaiosContinuitySetPanelNote(`Handoff failed: ${toErrorMessage(error)}`, 'error');
       }
       return;
