@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.5.1
+// @version      1.5.2
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8938,11 +8938,11 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.5.1';
+  const UAIOS_CONTINUITY_VERSION = '1.5.2';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
-  const UAIOS_BRIDGE_REQUEST_EVENT = 'uaios-continuity-bridge-request';
-  const UAIOS_BRIDGE_REPLY_EVENT = 'uaios-continuity-bridge-reply';
+  const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
+  const UAIOS_BRIDGE_REPLY_MAILBOX_ID = 'uaios-continuity-bridge-reply-mailbox';
   const UAIOS_CONTINUITY_PANEL_ID = 'uaios-continuity-panel';
   const UAIOS_CONTINUITY_STYLE_ID = 'uaios-continuity-style';
   const UAIOS_AUTO_CHECKPOINT_MS = 10 * 60 * 1000;
@@ -8950,6 +8950,7 @@
   let uaiosAutoCheckpointTimer = null;
   let uaiosCheckpointInFlight = false;
   let uaiosPanelNoteTimer = null;
+  let uaiosBridgeHealth = 'unknown';
 
   function uaiosContinuityLoadAssessment(checkpoint = uaiosContinuityLatestCheckpoint()) {
     const messages = Number(checkpoint?.total_message_count || 0);
@@ -8961,31 +8962,57 @@
     return { level, messages, chars };
   }
 
+  function uaiosContinuityBridgeMailbox(id) {
+    let node = document.getElementById(id);
+    if (!node) {
+      node = document.createElement('div');
+      node.id = id;
+      node.hidden = true;
+      (document.documentElement || document).appendChild(node);
+    }
+    return node;
+  }
+
   function uaiosContinuityBridgeRequest(type, payload = {}, timeoutMs = 1800) {
     const requestId = `uaios-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     return new Promise((resolve) => {
       let settled = false;
-      const finish = (value) => { if (settled) return; settled = true; window.removeEventListener('message', onMessage); document.removeEventListener(UAIOS_BRIDGE_REPLY_EVENT, onBridgeReply); resolve(value); };
-      const onMessage = (event) => {
-        const message = event.data;
-        if (event.source !== window || !message || message.source !== UAIOS_BRIDGE_REPLY_SOURCE || message.request_id !== requestId) return;
-        finish(message.ok ? message.record ?? true : null);
+      const replyNode = uaiosContinuityBridgeMailbox(UAIOS_BRIDGE_REPLY_MAILBOX_ID);
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        observer.disconnect();
+        resolve(value);
       };
-      const onBridgeReply = (event) => {
+      const onReply = () => {
         try {
-          const message = JSON.parse(String(event.detail || '{}'));
+          const message = JSON.parse(String(replyNode.textContent || '{}'));
           if (!message || message.source !== UAIOS_BRIDGE_REPLY_SOURCE || message.request_id !== requestId) return;
+          uaiosBridgeHealth = message.ok ? 'ok' : 'fail';
+          uaiosContinuityRenderPanel();
           finish(message.ok ? message.record ?? true : null);
         } catch (_) {}
       };
-      const cleanup = finish;
-      window.addEventListener('message', onMessage);
-      document.addEventListener(UAIOS_BRIDGE_REPLY_EVENT, onBridgeReply, { once: false });
-      document.dispatchEvent(new CustomEvent(UAIOS_BRIDGE_REQUEST_EVENT, {
-        detail: JSON.stringify({ source: UAIOS_BRIDGE_MAIN_SOURCE, request_id: requestId, type, ...payload })
-      }));
-      window.setTimeout(() => cleanup(null), timeoutMs);
+      const observer = new MutationObserver(onReply);
+      observer.observe(replyNode, { childList: true, characterData: true, subtree: true });
+      const requestNode = uaiosContinuityBridgeMailbox(UAIOS_BRIDGE_REQUEST_MAILBOX_ID);
+      requestNode.textContent = JSON.stringify({ source: UAIOS_BRIDGE_MAIN_SOURCE, request_id: requestId, type, ...payload });
+      onReply();
+      window.setTimeout(() => {
+        if (!settled) {
+          uaiosBridgeHealth = 'fail';
+          uaiosContinuityRenderPanel();
+        }
+        finish(null);
+      }, timeoutMs);
     });
+  }
+
+  async function uaiosContinuityProbeBridge() {
+    const result = await uaiosContinuityBridgeRequest('ping', {}, 1200);
+    uaiosBridgeHealth = result ? 'ok' : 'fail';
+    uaiosContinuityRenderPanel();
+    return uaiosBridgeHealth;
   }
 
   function uaiosContinuityReadPendingRollovers() {
@@ -9193,11 +9220,14 @@
     const pending = uaiosContinuityGetPendingRollover();
     const toggle = panel.querySelector('[data-uaios-action="toggle"]');
     const loadEl = panel.querySelector('[data-uaios-load]');
+    const bridgeEl = panel.querySelector('[data-uaios-bridge]');
     const checkpoint = panel.querySelector('[data-uaios-action="checkpoint"]');
     const handoff = panel.querySelector('[data-uaios-action="handoff"]');
     const resume = panel.querySelector('[data-uaios-action="resume"]');
     toggle.textContent = enabled ? 'Continuity ON' : 'Continuity OFF';
     toggle.dataset.uaiosStatus = enabled ? 'on' : 'off';
+    bridgeEl.textContent = `Bridge: ${uaiosBridgeHealth === 'ok' ? 'OK' : uaiosBridgeHealth === 'fail' ? 'FAIL' : '…'}`;
+    bridgeEl.dataset.uaiosBridge = uaiosBridgeHealth;
     loadEl.textContent = `Load: ${load.level} · ${load.messages} msgs · ${Math.round(load.chars / 1000)}k chars`;
     loadEl.dataset.uaiosLoad = load.level;
     panel.dataset.uaiosLoad = load.level;
@@ -9251,6 +9281,7 @@
       panel.innerHTML = `
         <button type="button" data-uaios-action="toggle">Continuity OFF</button>
         <span data-uaios-version>v${UAIOS_CONTINUITY_VERSION}</span>
+        <span data-uaios-bridge="unknown">Bridge: …</span>
         <span data-uaios-load="normal">Load: unknown</span>
         <button type="button" data-uaios-action="checkpoint">Checkpoint</button>
         <button type="button" data-uaios-action="handoff">New Chat Handoff</button>
@@ -9299,6 +9330,7 @@
   }
   function startContinuitySessionManager() {
     uaiosContinuityEnsurePanel();
+    void uaiosContinuityProbeBridge();
     if (uaiosAutoCheckpointTimer) return;
     const tick = () => {
       uaiosContinuityEnsurePanel();
@@ -9338,7 +9370,9 @@
       loadAssessment: uaiosContinuityLoadAssessment,
       prepareRollover: uaiosContinuityPrepareRollover,
       pendingRollover: uaiosContinuityGetPendingRollover,
-      applyPendingRollover: uaiosContinuityApplyPendingRollover
+      applyPendingRollover: uaiosContinuityApplyPendingRollover,
+      probeBridge: uaiosContinuityProbeBridge,
+      bridgeStatus: () => uaiosBridgeHealth
     });
     uaiosWatchdogRecordEvent('watchdog_loaded', { enabled: uaiosWatchdogIsEnabled() });
     if (uaiosWatchdogIsEnabled()) uaiosWatchdogScanNow();

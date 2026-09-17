@@ -5,8 +5,8 @@
   const ACTIVE_TAB_KEY = 'uaios.continuity.activeHandoffTab.v1';
   const MAIN_SOURCE = 'uaios-continuity-main-v1';
   const BRIDGE_SOURCE = 'uaios-continuity-bridge-v1';
-  const REQUEST_EVENT = 'uaios-continuity-bridge-request';
-  const REPLY_EVENT = 'uaios-continuity-bridge-reply';
+  const REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
+  const REPLY_MAILBOX_ID = 'uaios-continuity-bridge-reply-mailbox';
   const TTL_MS = 30 * 60 * 1000;
 
   function isFresh(record) {
@@ -18,6 +18,17 @@
     return /^https:\/\/chatgpt\.com\/g\/g-p-[^/]+\/project(?:[?#].*)?$/i.test(String(url || ''));
   }
 
+  function mailbox(id) {
+    let node = document.getElementById(id);
+    if (!node) {
+      node = document.createElement('div');
+      node.id = id;
+      node.hidden = true;
+      (document.documentElement || document).appendChild(node);
+    }
+    return node;
+  }
+
   async function readPending() {
     const data = await chrome.storage.local.get(STORAGE_KEY);
     const record = data?.[STORAGE_KEY] || null;
@@ -27,6 +38,7 @@
     }
     return record;
   }
+
   async function maybeRecoverProjectLanding() {
     const path = location.pathname || '/';
     if (path !== '/') return false;
@@ -40,23 +52,18 @@
   }
 
   function emitReply(message) {
-    try {
-      window.postMessage(message, location.origin);
-    } catch (_) {}
-    try {
-      document.dispatchEvent(new CustomEvent(REPLY_EVENT, {
-        detail: JSON.stringify(message)
-      }));
-    } catch (_) {}
+    const node = mailbox(REPLY_MAILBOX_ID);
+    node.textContent = JSON.stringify(message);
   }
 
   async function handleMessage(message) {
     if (!message || message.source !== MAIN_SOURCE || !message.request_id) return;
-
     let ok = true;
     let record = null;
     try {
-      if (message.type === 'savePending') {
+      if (message.type === 'ping') {
+        record = { bridge: 'ok', at: new Date().toISOString() };
+      } else if (message.type === 'savePending') {
         record = message.record;
         await chrome.storage.local.set({ [STORAGE_KEY]: record });
       } else if (message.type === 'getPending') {
@@ -85,15 +92,26 @@
     });
   }
 
-  window.addEventListener('message', (event) => {
-    if (event.source !== window) return;
-    void handleMessage(event.data);
-  });
-
-  document.addEventListener(REQUEST_EVENT, (event) => {
+  const requestNode = mailbox(REQUEST_MAILBOX_ID);
+  let lastRequestId = '';
+  const processMailbox = () => {
     try {
-      void handleMessage(JSON.parse(String(event.detail || '{}')));
+      const message = JSON.parse(String(requestNode.textContent || '{}'));
+      if (!message?.request_id || message.request_id === lastRequestId) return;
+      lastRequestId = message.request_id;
+      void handleMessage(message);
     } catch (_) {}
+  };
+  const mailboxObserver = new MutationObserver(processMailbox);
+  mailboxObserver.observe(requestNode, { childList: true, characterData: true, subtree: true });
+  processMailbox();
+
+  // Keep postMessage only as a legacy fallback. Do not compare event.source
+  // across Chrome execution worlds because the Window wrappers are distinct.
+  window.addEventListener('message', (event) => {
+    const message = event.data;
+    if (!message || message.source !== MAIN_SOURCE) return;
+    void handleMessage(message);
   });
 
   void maybeRecoverProjectLanding();
