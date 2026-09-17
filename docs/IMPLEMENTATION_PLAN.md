@@ -54,5 +54,5 @@ Acceptance: browser-side module works fully local when the adapter is disabled, 
 - Phase 1: merged on `main` as opt-in local UI watchdog.
 - Phase 2A: current implementation adds bounded local structured state, validated on-demand checkpoint capture, and bootstrap text generation/copy.
 - Phase 2B remains: move larger/full snapshots to IndexedDB if needed and add import/export recovery tooling.
-- Phase 3A: implemented in v1.3 with visible controls, active-tab auto-checkpoint, heuristic load indicator, same-Project rollover, and bootstrap resume without auto-send.
+- Phase 3A: implemented in v1.3 with visible controls, active-tab auto-checkpoint, heuristic load indicator, and bootstrap resume without auto-send. v1.3.1 hardens same-Project navigation by preferring ChatGPT's own live Project link over a synthesized route.
 - Phase 3B remains: tune heuristic thresholds from real usage and add optional IndexedDB history/export recovery.
