@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.3.2
+// @version      1.3.3
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8766,6 +8766,8 @@
     };
     const conversationRoute = path.match(/^(.*)\/c\/[^/]+(?:\/.*)?$/);
     if (conversationRoute) return normalize(conversationRoute[1]);
+    const projectLandingRoute = path.match(/^(\/g\/g-p-[^/]+)\/project(?:\/.*)?$/i);
+    if (projectLandingRoute) return normalize(projectLandingRoute[1]);
     const conversationId = getConversationIdFromUrl();
     if (conversationId) {
       const marker = `/c/${conversationId}`;
@@ -9011,6 +9013,7 @@
 
   function uaiosContinuityProjectLandingUrl(scope = uaiosContinuityScopeId()) {
     if (!scope || scope === 'general' || scope === '/') return `${location.origin}/`;
+    if (/^\/g\/g-p-[^/]+$/i.test(scope)) return new URL(`${scope}/project`, location.origin).href;
     return new URL(scope, location.origin).href;
   }
 
@@ -9018,10 +9021,11 @@
     if (!scope || scope === 'general' || scope === '/') return `${location.origin}/`;
     const normalizePath = (value) => String(value || '').replace(/\/+$/, '') || '/';
     const targetPath = normalizePath(scope);
+    const preferredLandingPath = /^\/g\/g-p-[^/]+$/i.test(targetPath) ? `${targetPath}/project` : targetPath;
     const candidates = Array.from(document.querySelectorAll('a[href]'))
       .map((anchor) => { try { return new URL(anchor.href, location.href); } catch (_) { return null; } })
       .filter((url) => url && url.origin === location.origin);
-    const exact = candidates.find((url) => normalizePath(url.pathname) === targetPath);
+    const exact = candidates.find((url) => normalizePath(url.pathname) === preferredLandingPath);
     if (exact) return exact.href;
     const projectOnly = candidates.find((url) => {
       const candidatePath = normalizePath(url.pathname);
