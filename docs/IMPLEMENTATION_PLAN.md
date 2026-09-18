@@ -60,4 +60,5 @@ Acceptance: browser-side module works fully local when the adapter is disabled, 
 - Phase 3A.3: v1.6.2 makes the Continuity control bar draggable with pointer input, persists its viewport position locally, clamps it on resize, and supports double-click reset from the drag handle.
 - Phase 3A.4: v1.6.3 removes the legacy raw/handoff export buttons from the ChatGPT conversation header and keeps manual JSON export under the Continuity `⋯ → Advanced / Export` menu.
 - Phase 3A.5: v1.6.4 makes drag-handle reset robust by detecting two stationary pointer releases within 450 ms and an 8 px proximity threshold, while preserving drag persistence, viewport clamping, and the compact export menu.
-- Phase 3B remains: tune heuristic thresholds from real usage and add optional IndexedDB history/export recovery.
+- Phase 3B.1: v1.7.0 adds local-only bounded recovery history in IndexedDB (20 checkpoints per continuity scope) and manual Recovery Snapshot export from the Continuity advanced menu. IndexedDB failures are non-fatal to the existing latest-checkpoint path.
+- Phase 3B remains: tune heuristic thresholds from real usage and add explicit import/manual restore tooling after recovery export is validated.
