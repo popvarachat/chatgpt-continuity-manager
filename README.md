@@ -434,6 +434,8 @@ In v1.7.0, every successful checkpoint is also copied to a local-only **IndexedD
 
 v1.8.0 completes the manual recovery loop with **⋯ → Recovery → Import Recovery Snapshot…**. Import validates schema and Project scope, previews the snapshot, requires explicit confirmation, restores only local Continuity checkpoint/Project State plus bounded IndexedDB history, and never auto-sends or opens a chat. Cross-Project restore is rejected.
 
+v1.8.1 reduces Recovery UI clutter: the primary `⋯` menu now shows a single **Recovery…** entry, which opens a compact secondary menu with **Backup snapshot** and **Restore snapshot…**. Recovery behavior and safeguards are unchanged.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.
