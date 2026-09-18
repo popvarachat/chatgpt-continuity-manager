@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Continuity Manager",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "description": "Local continuity tools for ChatGPT: handoff export, guarded retry/continue recovery, and bounded checkpoints.",
   "host_permissions": [
     "https://chatgpt.com/*"

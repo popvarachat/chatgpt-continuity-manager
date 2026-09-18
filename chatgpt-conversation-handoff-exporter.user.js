@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.5.8
+// @version      1.5.9
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8938,7 +8938,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.5.8';
+  const UAIOS_CONTINUITY_VERSION = '1.5.9';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9047,10 +9047,41 @@
     uaiosContinuityWriteObject(UAIOS_PENDING_ROLLOVERS_KEY, pending);
     return existed;
   }
+  function uaiosContinuityIsVisibleComposer(element) {
+    if (!element || !(element instanceof HTMLElement)) return false;
+    if (element.hidden || element.getAttribute('aria-hidden') === 'true') return false;
+    if (element.closest('[hidden], [aria-hidden="true"]')) return false;
+    const style = window.getComputedStyle(element);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width >= 120 && rect.height >= 20 &&
+      rect.bottom > 0 && rect.right > 0 &&
+      rect.top < window.innerHeight && rect.left < window.innerWidth;
+  }
+
   function uaiosContinuityFindComposer() {
-    return document.querySelector(
-      '#prompt-textarea, textarea[placeholder], [contenteditable="true"][data-lexical-editor="true"], [contenteditable="true"][role="textbox"]'
-    );
+    const selectors = [
+      '#prompt-textarea',
+      'textarea[placeholder]',
+      '[contenteditable="true"][data-lexical-editor="true"]',
+      '[contenteditable="true"][role="textbox"]'
+    ];
+    const candidates = Array.from(document.querySelectorAll(selectors.join(',')))
+      .filter((element) => uaiosContinuityIsVisibleComposer(element))
+      .map((element) => {
+        let score = 0;
+        if (element.id === 'prompt-textarea') score += 1000;
+        if (element.getAttribute('data-lexical-editor') === 'true') score += 400;
+        if (element.getAttribute('role') === 'textbox') score += 250;
+        if (element.getAttribute('contenteditable') === 'true') score += 150;
+        if (element.matches('textarea[placeholder]')) score += 120;
+        if (element.closest('form')) score += 80;
+        const rect = element.getBoundingClientRect();
+        score += Math.min(100, Math.round(rect.width / 10));
+        return { element, score };
+      })
+      .sort((a, b) => b.score - a.score);
+    return candidates[0]?.element || null;
   }
 
   function uaiosContinuityComposerText(composer) {
@@ -9066,9 +9097,9 @@
     const expected = String(text).trim();
     const looksHydrated = () => {
       const current = uaiosContinuityFindComposer();
+      if (!current || !uaiosContinuityIsVisibleComposer(current)) return false;
       const observed = uaiosContinuityComposerText(current).trim();
       return Boolean(
-        current &&
         observed.startsWith('UAIOS CONTINUITY BOOTSTRAP') &&
         observed.length >= Math.min(120, expected.length)
       );
