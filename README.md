@@ -426,6 +426,8 @@ The extension runs the upstream exporter in Chrome's `MAIN` world at `document_s
 
 After loading, a small **Continuity** control panel appears on ChatGPT pages. Use the visible ON/OFF control; the console API remains available for diagnostics but is no longer required for normal use. v1.5.9 also shows **Bridge: OK/FAIL** so cross-world handoff transport is observable before starting a rollover.
 
+In v1.6.3, the normal conversation header no longer shows the upstream Chinese **raw JSON** and **handoff JSON** download buttons. The primary Continuity surface keeps **Checkpoint**, **New Chat Handoff**, and a compact **⋯** menu. Manual JSON downloads remain available under **⋯ → Advanced / Export** as **Download Raw JSON** and **Download Handoff JSON**.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.
