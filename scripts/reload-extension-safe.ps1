@@ -42,28 +42,45 @@ if (-not $helperProcess) {
 
 $helperHandle = [IntPtr]$helperProcess.MainWindowHandle
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($helperHandle)
+$documentCondition = New-Object System.Windows.Automation.PropertyCondition(
+  [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [System.Windows.Automation.ControlType]::Document
+)
 $reloadCondition = New-Object System.Windows.Automation.AndCondition(
   (New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
     [System.Windows.Automation.ControlType]::Button
   )),
   (New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::NameProperty,
-    'Reload'
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
+    'dev-reload-button'
   ))
 )
+$extensionDocument = $null
 $reload = $null
 while ((Get-Date) -lt $deadline -and -not $reload) {
-  $reload = $root.FindFirst(
+  $documents = $root.FindAll(
     [System.Windows.Automation.TreeScope]::Descendants,
-    $reloadCondition
+    $documentCondition
   )
+  for ($i = 0; $i -lt $documents.Count -and -not $extensionDocument; $i++) {
+    $candidate = $documents.Item($i)
+    if ($candidate.Current.Name -like 'Extensions - ChatGPT Continuity Manager*') {
+      $extensionDocument = $candidate
+    }
+  }
+  if ($extensionDocument) {
+    $reload = $extensionDocument.FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      $reloadCondition
+    )
+  }
   if (-not $reload) { Start-Sleep -Milliseconds 200 }
 }
 
 try {
   if (-not $reload) {
-    throw 'Safe reload aborted: Reload button was not found in the helper window.'
+    throw 'Safe reload aborted: Extension dev-reload-button was not found in the helper Extensions document.'
   }
 
   if ($DryRun) {
