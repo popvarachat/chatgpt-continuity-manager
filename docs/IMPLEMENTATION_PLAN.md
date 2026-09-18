@@ -58,4 +58,5 @@ Acceptance: browser-side module works fully local when the adapter is disabled, 
 - Phase 3A.1: v1.6.0 hardens the bootstrap contract so a fresh chat reconstructs provisional project state from bounded recent evidence when stored project state is missing or stale, avoids asking the user to repeat checkpoint context, and still requires canonical verification for mutable external state.
 - Phase 3A.2: v1.6.1 derives a bounded structured Project State Snapshot at checkpoint time, merges manual overrides, surfaces State: AUTO/MANUAL+AUTO in the panel, and renders the snapshot before raw recent-message evidence.
 - Phase 3A.3: v1.6.2 makes the Continuity control bar draggable with pointer input, persists its viewport position locally, clamps it on resize, and supports double-click reset from the drag handle.
+- Phase 3A.4: v1.6.3 removes the legacy raw/handoff export buttons from the ChatGPT conversation header and keeps manual JSON export under the Continuity `⋯ → Advanced / Export` menu.
 - Phase 3B remains: tune heuristic thresholds from real usage and add optional IndexedDB history/export recovery.
