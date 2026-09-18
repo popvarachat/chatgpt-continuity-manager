@@ -430,6 +430,8 @@ After loading, a small **Continuity** control panel appears on ChatGPT pages. Us
 
 In v1.6.3, the normal conversation header no longer shows the upstream Chinese **raw JSON** and **handoff JSON** download buttons. The primary Continuity surface keeps **Checkpoint**, **New Chat Handoff**, and a compact **⋯** menu. Manual JSON downloads remain available under **⋯ → Advanced / Export** as **Download Raw JSON** and **Download Handoff JSON**.
 
+In v1.7.0, every successful checkpoint is also copied to a local-only **IndexedDB recovery history**, bounded to the newest 20 checkpoints per continuity scope. This history is best-effort and never blocks the existing latest checkpoint or handoff path. Use **⋯ → Recovery → Download Recovery Snapshot** to export the current Project state, latest checkpoint, and bounded checkpoint history as JSON for manual recovery.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.
