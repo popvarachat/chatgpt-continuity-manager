@@ -8,14 +8,14 @@ const background = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8').replace(/^\uFEFF/, ''));
 
-assert.match(source, /@version\s+1\.6\.2/);
+assert.match(source, /@version\s+1\.6\.3/);
 assert.equal(manifest.version, '1.6.3');
 assert.deepEqual(manifest.permissions, ['storage', 'tabs']);
 assert.equal(manifest.background.service_worker, 'background.js');
 assert.equal(manifest.content_scripts[0].world, 'ISOLATED');
 assert.equal(manifest.content_scripts[0].js[0], 'continuity-storage-bridge.js');
 assert.equal(manifest.content_scripts[1].world, 'MAIN');
-assert.match(source, /UAIOS_CONTINUITY_VERSION = '1\.6\.2'/);
+assert.match(source, /UAIOS_CONTINUITY_VERSION = '1\.6\.3'/);
 assert.match(source, /UAIOS_BRIDGE_REQUEST_MAILBOX_ID/);
 assert.match(source, /Bridge: /);
 assert.match(source, /openHandoffTab/);
