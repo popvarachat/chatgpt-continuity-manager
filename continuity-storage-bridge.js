@@ -92,9 +92,12 @@
     });
   }
 
-  const requestNode = mailbox(REQUEST_MAILBOX_ID);
   let lastRequestId = '';
+  let observedRequestNode = null;
+  let mailboxObserver = null;
+
   const processMailbox = () => {
+    const requestNode = mailbox(REQUEST_MAILBOX_ID);
     try {
       const message = JSON.parse(String(requestNode.textContent || '{}'));
       if (!message?.request_id || message.request_id === lastRequestId) return;
@@ -102,9 +105,31 @@
       void handleMessage(message);
     } catch (_) {}
   };
-  const mailboxObserver = new MutationObserver(processMailbox);
-  mailboxObserver.observe(requestNode, { childList: true, characterData: true, subtree: true });
-  processMailbox();
+
+  const bindRequestMailbox = () => {
+    const requestNode = mailbox(REQUEST_MAILBOX_ID);
+    if (observedRequestNode === requestNode && requestNode.isConnected && mailboxObserver) {
+      processMailbox();
+      return;
+    }
+    mailboxObserver?.disconnect();
+    observedRequestNode = requestNode;
+    mailboxObserver = new MutationObserver(processMailbox);
+    mailboxObserver.observe(requestNode, { childList: true, characterData: true, subtree: true });
+    processMailbox();
+  };
+
+  // ChatGPT can rebuild the early document DOM after content scripts run at
+  // document_start. Rebind if the shared mailbox node is replaced or detached.
+  const documentObserver = new MutationObserver(() => {
+    const current = document.getElementById(REQUEST_MAILBOX_ID);
+    if (!observedRequestNode?.isConnected || current !== observedRequestNode) {
+      bindRequestMailbox();
+    }
+  });
+  documentObserver.observe(document, { childList: true, subtree: true });
+  bindRequestMailbox();
+  document.addEventListener('DOMContentLoaded', bindRequestMailbox, { once: true });
 
   // Keep postMessage only as a legacy fallback. Do not compare event.source
   // across Chrome execution worlds because the Window wrappers are distinct.
