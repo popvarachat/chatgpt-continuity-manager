@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.6.0
+// @version      1.6.1
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8804,6 +8804,7 @@
 
   function uaiosContinuitySanitizeState(input = {}) {
     return {
+      objective: uaiosContinuityBoundString(input.objective, 2000),
       phase: uaiosContinuityBoundString(input.phase, 300),
       progress: uaiosContinuityBoundString(input.progress, 100),
       current_task: uaiosContinuityBoundString(input.current_task ?? input.currentTask, 2000),
@@ -8812,10 +8813,137 @@
       blockers: uaiosContinuityBoundArray(input.blockers),
       decisions: uaiosContinuityBoundArray(input.decisions),
       evidence: uaiosContinuityBoundArray(input.evidence),
+      do_not_redo: uaiosContinuityBoundArray(input.do_not_redo ?? input.doNotRedo),
       notes: uaiosContinuityBoundString(input.notes, 4000),
+      state_source: uaiosContinuityBoundString(input.state_source, 80),
+      confidence: uaiosContinuityBoundString(input.confidence, 40),
+      generated_at: uaiosContinuityBoundString(input.generated_at, 80),
+      manual_updated_at: uaiosContinuityBoundString(input.manual_updated_at, 80),
       updated_at: new Date().toISOString()
     };
   }
+
+  function uaiosContinuitySignalText(value, maxChars = 1200) {
+    return uaiosContinuityBoundString(
+      String(value || '').replace(/[*_>#]+/g, ' ').replace(/\s+/g, ' ').trim(),
+      maxChars
+    );
+  }
+
+  function uaiosContinuityUniqueSignals(items, limit = 8) {
+    const output = [];
+    const seen = new Set();
+    for (const item of items || []) {
+      const text = uaiosContinuitySignalText(item);
+      if (!text) continue;
+      const key = text.toLocaleLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      output.push(text);
+      if (output.length >= limit) break;
+    }
+    return output;
+  }
+
+  function uaiosContinuityLastSignal(lines, pattern, maxChars = 1200) {
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      if (pattern.test(lines[index])) return uaiosContinuitySignalText(lines[index], maxChars);
+    }
+    return '';
+  }
+
+  function uaiosContinuityDeriveProjectState(messages = [], title = '') {
+    const recent = Array.isArray(messages) ? messages.slice(-20) : [];
+    const linesByRole = recent.flatMap((message) => {
+      const role = String(message?.role || 'unknown');
+      return String(message?.content || '')
+        .split(/\r?\n/)
+        .map((line) => uaiosContinuitySignalText(line))
+        .filter((line) => line.length >= 6)
+        .map((text) => ({ role, text }));
+    });
+    const lines = linesByRole.map((item) => item.text);
+    const assistantMessages = recent
+      .filter((message) => message?.role === 'assistant')
+      .map((message) => uaiosContinuitySignalText(message?.content, 1800))
+      .filter(Boolean);
+    const userMessages = recent
+      .filter((message) => message?.role === 'user')
+      .map((message) => uaiosContinuitySignalText(message?.content, 1800))
+      .filter(Boolean);
+    const latestSubstantialUser = [...userMessages].reverse().find((text) => text.length >= 40) || '';
+    const latestAssistant = assistantMessages[assistantMessages.length - 1] || '';
+    const objective = latestSubstantialUser || (title ? 'Continue project: ' + uaiosContinuitySignalText(title, 500) : '');
+    const phase = uaiosContinuityLastSignal(lines, /(phase\s*[A-Z0-9._-]+|v\d+\.\d+\.\d+)/i, 300);
+    const progress = uaiosContinuityLastSignal(lines, /((progress)[^%]{0,80}\d{1,3}%|\b\d{1,3}%\b)/i, 100);
+    const currentTask = latestAssistant || latestSubstantialUser || objective;
+    const nextAction = [...assistantMessages].reverse().find((text) => /(next action|next step|continue|then|after that)/i.test(text)) || latestAssistant;
+    const completed = uaiosContinuityUniqueSignals(
+      lines.filter((line) => /(✅|\bPASS\b|success|successful|completed|done|\bmerged\b|merge into)/i.test(line)).reverse(), 8
+    ).reverse();
+    const blockers = uaiosContinuityUniqueSignals(
+      lines.filter((line) => /(❌|\bFAIL\b|failed|blocker|error|bug|remaining issue|still failing)/i.test(line)).reverse(), 6
+    ).reverse();
+    const decisions = uaiosContinuityUniqueSignals(
+      lines.filter((line) => /(root cause|architecture|decision|changed from|changed to|switch to|use .* instead)/i.test(line)).reverse(), 8
+    ).reverse();
+    const evidence = uaiosContinuityUniqueSignals(
+      lines.filter((line) => /(PR\s*#\d+|commit|main\b|v\d+\.\d+\.\d+|https?:\/\/|Bridge:\s*OK|\b[0-9a-f]{7,40}\b)/i.test(line)).reverse(), 10
+    ).reverse();
+    const doNotRedo = uaiosContinuityUniqueSignals(
+      lines.filter((line) => /(do not|don't|must not|avoid repeating|do not redo)/i.test(line)).reverse(), 6
+    ).reverse();
+    const confidence = objective && currentTask && (completed.length || evidence.length) ? 'medium-high' : objective ? 'medium' : 'low';
+    return uaiosContinuitySanitizeState({
+      objective, phase, progress, current_task: currentTask, next_action: nextAction,
+      completed, blockers, decisions, evidence, do_not_redo: doNotRedo,
+      notes: 'Auto-derived from bounded recent conversation evidence. Re-verify mutable external status from canonical sources.',
+      state_source: 'autopilot-v1', confidence, generated_at: new Date().toISOString()
+    });
+  }
+
+  function uaiosContinuityMergeProjectState(autoState, manualState) {
+    if (!manualState || typeof manualState !== 'object') return autoState;
+    const merged = { ...(autoState || {}) };
+    for (const field of ['objective', 'phase', 'progress', 'current_task', 'next_action', 'notes']) {
+      const value = uaiosContinuitySignalText(manualState[field], field === 'progress' ? 100 : 2000);
+      if (value) merged[field] = value;
+    }
+    for (const field of ['completed', 'blockers', 'decisions', 'evidence', 'do_not_redo']) {
+      if (Array.isArray(manualState[field]) && manualState[field].length) {
+        merged[field] = uaiosContinuityUniqueSignals([...manualState[field], ...(Array.isArray(merged[field]) ? merged[field] : [])], 12);
+      }
+    }
+    merged.state_source = 'manual+autopilot-v1';
+    merged.manual_updated_at = manualState.updated_at || null;
+    merged.generated_at = autoState?.generated_at || new Date().toISOString();
+    return uaiosContinuitySanitizeState(merged);
+  }
+
+  function uaiosContinuityFormatProjectState(state) {
+    if (!state) return 'PROJECT STATE SNAPSHOT\nState unavailable; rely on recent conversation evidence.';
+    const lines = [
+      'PROJECT STATE SNAPSHOT',
+      'Source: ' + (state.state_source || 'unknown') + ' | Confidence: ' + (state.confidence || 'unknown'),
+      state.objective ? 'Objective: ' + state.objective : '',
+      state.phase ? 'Phase: ' + state.phase : '',
+      state.progress ? 'Progress: ' + state.progress : '',
+      state.current_task ? 'Current task: ' + state.current_task : '',
+      state.next_action ? 'Next action: ' + state.next_action : ''
+    ].filter(Boolean);
+    const appendList = (label, values, limit = 5) => {
+      if (!Array.isArray(values) || !values.length) return;
+      lines.push(label + ':');
+      for (const value of values.slice(-limit)) lines.push('- ' + uaiosContinuitySignalText(value, 1200));
+    };
+    appendList('Completed', state.completed);
+    appendList('Blockers / unresolved signals', state.blockers);
+    appendList('Decisions / architecture signals', state.decisions);
+    appendList('Canonical evidence hints', state.evidence);
+    appendList('Do not redo / constraints', state.do_not_redo);
+    return lines.join('\n');
+  }
+
   function uaiosContinuityGetState() {
     const states = uaiosContinuityReadObject(UAIOS_PROJECT_STATES_KEY);
     return states[uaiosContinuityScopeId()] || null;
@@ -8873,8 +9001,11 @@
         updated_at: doc.updated_at ?? null
       }))
       : [];
+    const autoProjectState = uaiosContinuityDeriveProjectState(allMessages, handoff.title || '');
+    const projectState = uaiosContinuityMergeProjectState(autoProjectState, uaiosContinuityGetState());
     const record = {
       schema_version: 1,
+      project_state_schema_version: 1,
       scope: uaiosContinuityScopeId(),
       captured_at: new Date().toISOString(),
       source_conversation_id: handoff.conversation_id || conversationId,
@@ -8884,15 +9015,19 @@
       total_content_chars: allMessages.reduce((sum, message) => sum + String(message?.content || '').length, 0),
       recent_messages: recentMessages,
       textdocs,
-      project_state: uaiosContinuityGetState(),
+      project_state: projectState,
       transport: result.transport || null
     };
     return uaiosContinuitySaveCheckpointRecord(record);
   }
   function uaiosContinuityBuildBootstrap(checkpoint = uaiosContinuityLatestCheckpoint()) {
     if (!checkpoint) return null;
+    const autoFallbackState = uaiosContinuityDeriveProjectState(checkpoint.recent_messages || [], checkpoint.title || '');
+    const projectState = checkpoint.project_state ||
+      uaiosContinuityMergeProjectState(autoFallbackState, uaiosContinuityGetState());
     const payload = {
       schema_version: checkpoint.schema_version,
+      project_state_schema_version: checkpoint.project_state_schema_version || 1,
       scope: checkpoint.scope,
       captured_at: checkpoint.captured_at,
       source_conversation_id: checkpoint.source_conversation_id,
@@ -8900,18 +9035,21 @@
       source_update_time: checkpoint.source_update_time,
       total_message_count: checkpoint.total_message_count,
       total_content_chars: checkpoint.total_content_chars || 0,
-      project_state: checkpoint.project_state || null,
+      project_state: projectState,
       recent_messages: checkpoint.recent_messages || [],
       textdocs: checkpoint.textdocs || []
     };
     return [
       'UAIOS CONTINUITY BOOTSTRAP',
-      'Use this checkpoint as continuity context. Verify mutable external state from canonical sources before acting.',
+      'Use the Project State Snapshot for orientation, then use recent evidence and canonical sources to verify mutable status.',
       'Do not assume old branch/PR/workflow status is still current solely because it appears below.',
       'If project_state is missing or stale, reconstruct a provisional project state from recent_messages before continuing.',
       'Prioritize the latest explicit user goal, completed work, blockers, decisions, verified evidence, and next action.',
       'Do not ask the user to repeat context already present in this bootstrap. Continue when the next action is clear.',
       '',
+      uaiosContinuityFormatProjectState(projectState),
+      '',
+      'BOUNDED CONTINUITY PAYLOAD',
       JSON.stringify(payload, null, 2)
     ].join('\n');
   }
@@ -8941,7 +9079,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.6.0';
+  const UAIOS_CONTINUITY_VERSION = '1.6.1';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9352,6 +9490,7 @@
     const toggle = panel.querySelector('[data-uaios-action="toggle"]');
     const loadEl = panel.querySelector('[data-uaios-load]');
     const bridgeEl = panel.querySelector('[data-uaios-bridge]');
+    const stateEl = panel.querySelector('[data-uaios-state]');
     const checkpoint = panel.querySelector('[data-uaios-action="checkpoint"]');
     const handoff = panel.querySelector('[data-uaios-action="handoff"]');
     const resume = panel.querySelector('[data-uaios-action="resume"]');
@@ -9359,6 +9498,9 @@
     toggle.dataset.uaiosStatus = enabled ? 'on' : 'off';
     bridgeEl.textContent = `Bridge: ${uaiosBridgeHealth === 'ok' ? 'OK' : uaiosBridgeHealth === 'fail' ? 'FAIL' : '…'}`;
     bridgeEl.dataset.uaiosBridge = uaiosBridgeHealth;
+    const stateSource = uaiosContinuityLatestCheckpoint()?.project_state?.state_source || '';
+    stateEl.textContent = 'State: ' + (stateSource.includes('manual') ? 'MANUAL+AUTO' : stateSource ? 'AUTO' : 'WAIT');
+    stateEl.dataset.uaiosState = stateSource || 'wait';
     loadEl.textContent = `Load: ${load.level} · ${load.messages} msgs · ${Math.round(load.chars / 1000)}k chars`;
     loadEl.dataset.uaiosLoad = load.level;
     panel.dataset.uaiosLoad = load.level;
@@ -9505,6 +9647,8 @@
       scopeId: uaiosContinuityScopeId,
       getState: uaiosContinuityGetState,
       setState: uaiosContinuitySetState,
+      deriveState: (messages, title) => uaiosContinuityDeriveProjectState(messages, title),
+      formatState: uaiosContinuityFormatProjectState,
       checkpointNow: uaiosContinuityCheckpointNow,
       latestCheckpoint: uaiosContinuityLatestCheckpoint,
       buildBootstrap: uaiosContinuityBuildBootstrap,
