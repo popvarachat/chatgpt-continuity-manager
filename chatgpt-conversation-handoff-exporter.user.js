@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.6.1
+// @version      1.6.2
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9079,13 +9079,14 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.6.1';
+  const UAIOS_CONTINUITY_VERSION = '1.6.2';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
   const UAIOS_BRIDGE_REPLY_MAILBOX_ID = 'uaios-continuity-bridge-reply-mailbox';
   const UAIOS_CONTINUITY_PANEL_ID = 'uaios-continuity-panel';
   const UAIOS_CONTINUITY_STYLE_ID = 'uaios-continuity-style';
+  const UAIOS_CONTINUITY_PANEL_POSITION_KEY = 'uaios.continuity.panelPosition.v1';
   const UAIOS_AUTO_CHECKPOINT_MS = 10 * 60 * 1000;
   const UAIOS_PENDING_ROLLOVER_TTL_MS = 30 * 60 * 1000;
   const UAIOS_STAGED_HANDOFF_WAIT_MS = 4000;
@@ -9458,6 +9459,12 @@
         color: inherit; cursor: pointer; white-space: nowrap;
       }
       #${UAIOS_CONTINUITY_PANEL_ID} button:disabled { opacity: .55; cursor: wait; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-drag-handle] {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 22px; height: 28px; border-radius: 8px;
+        cursor: grab; user-select: none; touch-action: none; opacity: .62;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID}[data-uaios-dragging="true"] [data-uaios-drag-handle] { cursor: grabbing; opacity: 1; }
       #${UAIOS_CONTINUITY_PANEL_ID}[data-uaios-load="high"], #${UAIOS_CONTINUITY_PANEL_ID}[data-uaios-load="critical"] { border-color: rgba(245,158,11,.8); }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-status="on"] { font-weight: 700; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-load="high"],
@@ -9467,6 +9474,111 @@
     `;
     (document.head || document.documentElement).appendChild(style);
   }
+  function uaiosContinuityReadPanelPosition() {
+    try {
+      const value = JSON.parse(localStorage.getItem(UAIOS_CONTINUITY_PANEL_POSITION_KEY) || 'null');
+      const x = Number(value?.x);
+      const y = Number(value?.y);
+      return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function uaiosContinuityClampPanelPosition(panel, x, y) {
+    const margin = 8;
+    const rect = panel.getBoundingClientRect();
+    const maxX = Math.max(margin, window.innerWidth - rect.width - margin);
+    const maxY = Math.max(margin, window.innerHeight - rect.height - margin);
+    return {
+      x: Math.min(Math.max(margin, Number(x) || margin), maxX),
+      y: Math.min(Math.max(margin, Number(y) || margin), maxY)
+    };
+  }
+
+  function uaiosContinuityApplyPanelPosition(panel, position = uaiosContinuityReadPanelPosition()) {
+    if (!panel || !position) return false;
+    const clamped = uaiosContinuityClampPanelPosition(panel, position.x, position.y);
+    panel.style.left = `${Math.round(clamped.x)}px`;
+    panel.style.top = `${Math.round(clamped.y)}px`;
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+    panel.dataset.uaiosPositioned = 'true';
+    return clamped;
+  }
+
+  function uaiosContinuitySavePanelPosition(panel) {
+    if (!panel) return null;
+    const rect = panel.getBoundingClientRect();
+    const clamped = uaiosContinuityClampPanelPosition(panel, rect.left, rect.top);
+    localStorage.setItem(UAIOS_CONTINUITY_PANEL_POSITION_KEY, JSON.stringify(clamped));
+    return clamped;
+  }
+
+  function uaiosContinuityResetPanelPosition(panel) {
+    localStorage.removeItem(UAIOS_CONTINUITY_PANEL_POSITION_KEY);
+    panel.style.removeProperty('left');
+    panel.style.removeProperty('top');
+    panel.style.removeProperty('right');
+    panel.style.removeProperty('bottom');
+    delete panel.dataset.uaiosPositioned;
+  }
+
+  function uaiosContinuityInstallPanelDragging(panel) {
+    if (!panel || panel.dataset.uaiosDragReady === 'true') return;
+    const handle = panel.querySelector('[data-uaios-drag-handle]');
+    if (!handle) return;
+    panel.dataset.uaiosDragReady = 'true';
+    let drag = null;
+
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      const rect = panel.getBoundingClientRect();
+      drag = {
+        pointerId: event.pointerId,
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top
+      };
+      panel.dataset.uaiosDragging = 'true';
+      try { handle.setPointerCapture(event.pointerId); } catch (_) {}
+      event.preventDefault();
+    });
+
+    handle.addEventListener('pointermove', (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      const position = uaiosContinuityClampPanelPosition(
+        panel,
+        event.clientX - drag.offsetX,
+        event.clientY - drag.offsetY
+      );
+      uaiosContinuityApplyPanelPosition(panel, position);
+      event.preventDefault();
+    });
+
+    const finishDrag = (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      uaiosContinuitySavePanelPosition(panel);
+      drag = null;
+      delete panel.dataset.uaiosDragging;
+      try { handle.releasePointerCapture(event.pointerId); } catch (_) {}
+    };
+    handle.addEventListener('pointerup', finishDrag);
+    handle.addEventListener('pointercancel', finishDrag);
+
+    handle.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      uaiosContinuityResetPanelPosition(panel);
+    });
+
+    window.addEventListener('resize', () => {
+      if (!panel.isConnected || panel.dataset.uaiosPositioned !== 'true') return;
+      const rect = panel.getBoundingClientRect();
+      const position = uaiosContinuityClampPanelPosition(panel, rect.left, rect.top);
+      uaiosContinuityApplyPanelPosition(panel, position);
+      localStorage.setItem(UAIOS_CONTINUITY_PANEL_POSITION_KEY, JSON.stringify(position));
+    }, { passive: true });
+  }
+
   function uaiosContinuitySetPanelNote(message, kind = 'info') {
     const panel = document.getElementById(UAIOS_CONTINUITY_PANEL_ID);
     const note = panel?.querySelector('[data-uaios-note]');
@@ -9564,6 +9676,7 @@
       panel = document.createElement('div');
       panel.id = UAIOS_CONTINUITY_PANEL_ID;
       panel.innerHTML = `
+        <span data-uaios-drag-handle title="Drag to move · double-click to reset" aria-label="Drag Continuity panel">⠿</span>
         <button type="button" data-uaios-action="toggle">Continuity OFF</button>
         <span data-uaios-version>v${UAIOS_CONTINUITY_VERSION}</span>
         <span data-uaios-bridge="unknown">Bridge: …</span>
@@ -9580,6 +9693,8 @@
         void uaiosContinuityHandlePanelAction(button.dataset.uaiosAction);
       });
       (document.body || document.documentElement).appendChild(panel);
+      uaiosContinuityInstallPanelDragging(panel);
+      uaiosContinuityApplyPanelPosition(panel);
     }
     uaiosContinuityRenderPanel();
     return panel;
