@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.5.5
+// @version      1.5.6
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8938,7 +8938,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.5.5';
+  const UAIOS_CONTINUITY_VERSION = '1.5.6';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9053,7 +9053,15 @@
     );
   }
 
-  function uaiosContinuityFillComposer(text) {
+  function uaiosContinuityComposerText(composer) {
+    if (!composer) return '';
+    if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
+      return String(composer.value || '');
+    }
+    return String(composer.innerText || composer.textContent || '');
+  }
+
+  async function uaiosContinuityFillComposer(text) {
     const composer = uaiosContinuityFindComposer();
     if (!composer || !text) return false;
     composer.focus();
@@ -9064,15 +9072,34 @@
       const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
       if (setter) setter.call(composer, text);
       else composer.value = text;
+      composer.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+        data: text
+      }));
     } else {
-      composer.textContent = text;
+      let inserted = false;
+      try {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(composer);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        inserted = Boolean(document.execCommand?.('insertText', false, text));
+      } catch (_) {}
+      if (!inserted) {
+        composer.replaceChildren(document.createTextNode(text));
+        composer.dispatchEvent(new InputEvent('input', {
+          bubbles: true,
+          inputType: 'insertText',
+          data: text
+        }));
+      }
     }
-    composer.dispatchEvent(new InputEvent('input', {
-      bubbles: true,
-      inputType: 'insertText',
-      data: text
-    }));
-    return true;
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    const observed = uaiosContinuityComposerText(composer).trim();
+    return observed.startsWith('UAIOS CONTINUITY BOOTSTRAP')
+      && observed.length >= Math.min(120, String(text).trim().length);
   }
 
   function uaiosContinuityProjectLandingUrl(scope = uaiosContinuityScopeId()) {
@@ -9116,14 +9143,25 @@
     let pending = uaiosContinuityGetPendingRollover();
     if (!pending) {
       const bridged = await uaiosContinuityBridgeRequest('getPending');
-      if (bridged && bridged.scope === uaiosContinuityScopeId()) pending = bridged;
+      if (bridged && bridged.scope === uaiosContinuityScopeId()) {
+        pending = uaiosContinuitySetPendingRollover(bridged);
+        uaiosContinuityRenderPanel();
+      }
     }
     if (!pending || isConversationPage()) return false;
     if (pending.handoff_state === 'staged') {
       const createdAt = Date.parse(pending.created_at || '');
       if (Number.isFinite(createdAt) && Date.now() - createdAt < UAIOS_STAGED_HANDOFF_WAIT_MS) return false;
     }
-    if (!uaiosContinuityFillComposer(pending.bootstrap)) return false;
+    if (!await uaiosContinuityFillComposer(pending.bootstrap)) {
+      uaiosWatchdogRecordEvent('rollover_bootstrap_fill_failed', {
+        scope: pending.scope,
+        sourceConversationId: pending.source_conversation_id
+      });
+      uaiosContinuitySetPanelNote('Composer hydration failed; pending handoff kept. Use Resume Handoff.', 'warn');
+      uaiosContinuityRenderPanel();
+      return false;
+    }
     uaiosContinuityClearPendingRollover(pending.scope);
     void uaiosContinuityBridgeRequest('clearPending');
     uaiosWatchdogRecordEvent('rollover_bootstrap_applied', {
