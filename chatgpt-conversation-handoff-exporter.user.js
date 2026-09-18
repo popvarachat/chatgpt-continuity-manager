@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.8.1
+// @version      1.8.2
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8564,6 +8564,10 @@
   const UAIOS_WATCHDOG_WINDOW_MS = 15 * 60 * 1000;
   const UAIOS_WATCHDOG_COOLDOWN_MS = 15 * 1000;
   const UAIOS_WATCHDOG_SCAN_MS = 2500;
+  const UAIOS_RATE_LIMIT_UNTIL_KEY = 'uaios.continuity.rateLimitUntil.v1';
+  const UAIOS_RATE_LIMIT_BASE_BACKOFF_MS = 3 * 60 * 1000;
+  const UAIOS_RATE_LIMIT_MAX_BACKOFF_MS = 10 * 60 * 1000;
+  const UAIOS_RATE_LIMIT_WINDOW_MS = 30 * 60 * 1000;
   const UAIOS_WATCHDOG_RETRY_LABELS = [
     'retry', 'try again',
     '\u0e17\u0e33\u0e0b\u0e49\u0e33',
@@ -8581,6 +8585,23 @@
     '\u0e2b\u0e21\u0e14\u0e40\u0e27\u0e25\u0e32',
     '\u0e2b\u0e21\u0e14\u0e40\u0e27\u0e25\u0e32\u0e08\u0e31\u0e14\u0e2a\u0e48\u0e07\u0e02\u0e49\u0e2d\u0e04\u0e27\u0e32\u0e21',
     '\u0e40\u0e01\u0e34\u0e14\u0e02\u0e49\u0e2d\u0e1c\u0e34\u0e14\u0e1e\u0e25\u0e32\u0e14'
+  ];
+  const UAIOS_RATE_LIMIT_MARKERS = [
+    'too many requests',
+    'requests too quickly',
+    'temporarily limited access to your conversation',
+    'please wait a few minutes before trying again',
+    '\u0e21\u0e35\u0e04\u0e33\u0e02\u0e2d\u0e08\u0e33\u0e19\u0e27\u0e19\u0e21\u0e32\u0e01\u0e40\u0e01\u0e34\u0e19\u0e44\u0e1b',
+    '\u0e04\u0e38\u0e13\u0e01\u0e33\u0e25\u0e31\u0e07\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e40\u0e23\u0e47\u0e27\u0e40\u0e01\u0e34\u0e19\u0e44\u0e1b',
+    '\u0e42\u0e1b\u0e23\u0e14\u0e23\u0e2d\u0e2a\u0e2d\u0e07\u0e2a\u0e32\u0e21\u0e19\u0e32\u0e17\u0e35\u0e01\u0e48\u0e2d\u0e19\u0e08\u0e30\u0e25\u0e2d\u0e07\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07'
+  ];
+  const UAIOS_RATE_LIMIT_DISMISS_LABELS = [
+    'got it', 'understood',
+    '\u0e40\u0e02\u0e49\u0e32\u0e43\u0e08\u0e41\u0e25\u0e49\u0e27'
+  ];
+  const UAIOS_RATE_LIMIT_BLOCKED_MARKERS = [
+    'delete', 'purchase', 'payment', 'permission', 'approve', 'allow access',
+    '\u0e25\u0e1a', '\u0e0a\u0e33\u0e23\u0e30', '\u0e2d\u0e19\u0e38\u0e0d\u0e32\u0e15', '\u0e2d\u0e19\u0e38\u0e21\u0e31\u0e15\u0e34'
   ];
   let uaiosWatchdogObserver = null;
   let uaiosWatchdogTimer = null;
@@ -8664,6 +8685,98 @@
     }
   }
 
+  function uaiosRateLimitCooldownUntil() {
+    try {
+      const value = Number(localStorage.getItem(UAIOS_RATE_LIMIT_UNTIL_KEY) || 0);
+      return Number.isFinite(value) ? value : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function uaiosRateLimitRemainingMs() {
+    return Math.max(0, uaiosRateLimitCooldownUntil() - Date.now());
+  }
+
+  function uaiosRateLimitIsCooling() {
+    return uaiosRateLimitRemainingMs() > 0;
+  }
+
+  function uaiosRateLimitBackoffMs() {
+    const cutoff = Date.now() - UAIOS_RATE_LIMIT_WINDOW_MS;
+    const recentDetections = uaiosWatchdogReadEvents().filter((event) => {
+      const eventTime = Date.parse(event.at || '');
+      return event.type === 'rate_limit_detected' &&
+        Number.isFinite(eventTime) && eventTime >= cutoff;
+    }).length;
+    const multiplier = 2 ** Math.min(recentDetections, 2);
+    return Math.min(UAIOS_RATE_LIMIT_BASE_BACKOFF_MS * multiplier, UAIOS_RATE_LIMIT_MAX_BACKOFF_MS);
+  }
+
+  function uaiosRateLimitStartCooling(reason = '') {
+    const duration = uaiosRateLimitBackoffMs();
+    const until = Math.max(uaiosRateLimitCooldownUntil(), Date.now() + duration);
+    try {
+      localStorage.setItem(UAIOS_RATE_LIMIT_UNTIL_KEY, String(until));
+    } catch (_) {}
+    uaiosWatchdogRecordEvent('rate_limit_detected', {
+      cooldown_ms: duration,
+      cooldown_until: new Date(until).toISOString(),
+      reason: String(reason || '').slice(0, 240)
+    });
+    uaiosContinuityRenderPanel();
+    return until;
+  }
+
+  function uaiosRateLimitButtonLabel(element) {
+    const raw = element?.innerText || element?.textContent || element?.getAttribute?.('aria-label') || element?.getAttribute?.('title') || '';
+    return String(raw).toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  function uaiosRateLimitFindModal() {
+    const dialogs = [...new Set(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'))];
+    for (const dialog of dialogs) {
+      if (!uaiosWatchdogIsClickable(dialog)) continue;
+      const dialogText = uaiosWatchdogNormalizeText(dialog);
+      if (!uaiosWatchdogMatchesAny(dialogText, UAIOS_RATE_LIMIT_MARKERS)) continue;
+      if (uaiosWatchdogMatchesAny(dialogText, UAIOS_RATE_LIMIT_BLOCKED_MARKERS)) continue;
+      const button = Array.from(dialog.querySelectorAll('button, [role="button"]')).find((candidate) => {
+        if (!uaiosWatchdogIsClickable(candidate)) return false;
+        return UAIOS_RATE_LIMIT_DISMISS_LABELS.includes(uaiosRateLimitButtonLabel(candidate));
+      });
+      if (button) return { dialog, button, dialogText };
+    }
+    return null;
+  }
+
+  function uaiosRateLimitScanAndDismiss() {
+    const match = uaiosRateLimitFindModal();
+    if (!match) return false;
+    if (match.dialog.getAttribute('data-uaios-rate-limit-handled') === 'true') return true;
+    match.dialog.setAttribute('data-uaios-rate-limit-handled', 'true');
+    uaiosRateLimitStartCooling(match.dialogText);
+    if (uaiosWatchdogPending) return true;
+    uaiosWatchdogPending = true;
+    window.setTimeout(() => {
+      try {
+        if (!uaiosWatchdogIsEnabled() || !match.dialog.isConnected) return;
+        const dialogText = uaiosWatchdogNormalizeText(match.dialog);
+        const label = uaiosRateLimitButtonLabel(match.button);
+        if (!uaiosWatchdogMatchesAny(dialogText, UAIOS_RATE_LIMIT_MARKERS)) return;
+        if (uaiosWatchdogMatchesAny(dialogText, UAIOS_RATE_LIMIT_BLOCKED_MARKERS)) return;
+        if (!UAIOS_RATE_LIMIT_DISMISS_LABELS.includes(label)) return;
+        if (!uaiosWatchdogIsClickable(match.button)) return;
+        match.button.click();
+        uaiosWatchdogLastActionAt = Date.now();
+        uaiosWatchdogRecordEvent('rate_limit_auto_dismiss', { label, cooldown_until: new Date(uaiosRateLimitCooldownUntil()).toISOString() });
+      } finally {
+        uaiosWatchdogPending = false;
+        uaiosContinuityRenderPanel();
+      }
+    }, 450);
+    return true;
+  }
+
   function uaiosWatchdogBudgetAvailable(action) {
     const now = Date.now();
     const cutoff = now - UAIOS_WATCHDOG_WINDOW_MS;
@@ -8726,6 +8839,8 @@
   function uaiosWatchdogScanNow() {
     if (!uaiosWatchdogIsEnabled() || uaiosWatchdogPending) return false;
     if (!isConversationPage()) return false;
+    if (uaiosRateLimitScanAndDismiss()) return true;
+    if (uaiosRateLimitIsCooling()) return false;
     const retry = uaiosWatchdogFindCandidate('retry');
     if (retry) return uaiosWatchdogQueueClick(retry, 'retry');
     const continuation = uaiosWatchdogFindCandidate('continue');
@@ -8737,6 +8852,8 @@
       enabled: uaiosWatchdogIsEnabled(),
       scope: uaiosWatchdogScopeKey(),
       pending: uaiosWatchdogPending,
+      rateLimitCooling: uaiosRateLimitIsCooling(),
+      rateLimitRemainingMs: uaiosRateLimitRemainingMs(),
       recentEvents: uaiosWatchdogReadEvents().slice(-10)
     };
   }
@@ -9485,7 +9602,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.8.1';
+  const UAIOS_CONTINUITY_VERSION = '1.8.2';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -10076,6 +10193,7 @@
     const loadEl = panel.querySelector('[data-uaios-load]');
     const bridgeEl = panel.querySelector('[data-uaios-bridge]');
     const stateEl = panel.querySelector('[data-uaios-state]');
+    const rateLimitEl = panel.querySelector('[data-uaios-rate-limit]');
     const checkpoint = panel.querySelector('[data-uaios-action="checkpoint"]');
     const handoff = panel.querySelector('[data-uaios-action="handoff"]');
     const resume = panel.querySelector('[data-uaios-action="resume"]');
@@ -10090,15 +10208,31 @@
     const stateSource = uaiosContinuityLatestCheckpoint()?.project_state?.state_source || '';
     stateEl.textContent = 'State: ' + (stateSource.includes('manual') ? 'MANUAL+AUTO' : stateSource ? 'AUTO' : 'WAIT');
     stateEl.dataset.uaiosState = stateSource || 'wait';
+    const rateLimitRemainingMs = uaiosRateLimitRemainingMs();
+    const rateLimitCooling = rateLimitRemainingMs > 0;
+    if (rateLimitEl) {
+      if (rateLimitCooling) {
+        const totalSeconds = Math.max(0, Math.ceil(rateLimitRemainingMs / 1000));
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = String(totalSeconds % 60).padStart(2, '0');
+        rateLimitEl.hidden = false;
+        rateLimitEl.textContent = `Rate Limit: COOLING ${minutes}:${seconds}`;
+        rateLimitEl.dataset.uaiosRateLimit = 'cooling';
+      } else {
+        rateLimitEl.hidden = true;
+        rateLimitEl.textContent = '';
+        rateLimitEl.dataset.uaiosRateLimit = 'idle';
+      }
+    }
     loadEl.textContent = `Load: ${load.level} · ${load.messages} msgs · ${Math.round(load.chars / 1000)}k chars`;
     loadEl.dataset.uaiosLoad = load.level;
     panel.dataset.uaiosLoad = load.level;
     handoff.textContent = ['high', 'critical'].includes(load.level) ? '⚠ New Chat Handoff' : 'New Chat Handoff';
     const generationActive = uaiosContinuityGenerationInProgress();
-    checkpoint.disabled = uaiosCheckpointInFlight || generationActive || !isConversationPage();
-    handoff.disabled = uaiosCheckpointInFlight || generationActive || !isConversationPage();
-    if (exportRaw) exportRaw.disabled = uaiosExportInFlight || generationActive || !isConversationPage();
-    if (exportHandoff) exportHandoff.disabled = uaiosExportInFlight || generationActive || !isConversationPage();
+    checkpoint.disabled = uaiosCheckpointInFlight || generationActive || rateLimitCooling || !isConversationPage();
+    handoff.disabled = uaiosCheckpointInFlight || generationActive || rateLimitCooling || !isConversationPage();
+    if (exportRaw) exportRaw.disabled = uaiosExportInFlight || generationActive || rateLimitCooling || !isConversationPage();
+    if (exportHandoff) exportHandoff.disabled = uaiosExportInFlight || generationActive || rateLimitCooling || !isConversationPage();
     if (exportRecovery) exportRecovery.disabled = uaiosExportInFlight || uaiosRecoveryImportInFlight || generationActive || !uaiosContinuityLatestCheckpoint();
     if (importRecovery) importRecovery.disabled = uaiosExportInFlight || uaiosRecoveryImportInFlight;
     resume.hidden = !pending || isConversationPage();
@@ -10252,6 +10386,7 @@
         <span data-uaios-version>v${UAIOS_CONTINUITY_VERSION}</span>
         <span data-uaios-bridge="unknown">Bridge: …</span>
         <span data-uaios-state="wait">State: WAIT</span>
+        <span data-uaios-rate-limit="idle" hidden></span>
         <span data-uaios-load="normal">Load: unknown</span>
         <button type="button" data-uaios-action="checkpoint">Checkpoint</button>
         <button type="button" data-uaios-action="handoff">New Chat Handoff</button>
@@ -10303,6 +10438,7 @@
 
   async function uaiosContinuityAutoCheckpointTick() {
     if (!uaiosWatchdogIsEnabled() || !isConversationPage()) return false;
+    if (uaiosRateLimitIsCooling()) return false;
     if (document.visibilityState !== 'visible' || uaiosCheckpointInFlight || uaiosContinuityGenerationInProgress()) return false;
     const latest = uaiosContinuityLatestCheckpoint();
     const lastAt = Date.parse(latest?.captured_at || '');

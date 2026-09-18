@@ -436,6 +436,8 @@ v1.8.0 completes the manual recovery loop with **⋯ → Recovery → Import Rec
 
 v1.8.1 reduces Recovery UI clutter: the primary `⋯` menu now shows a single **Recovery…** entry, which opens a compact secondary menu with **Backup snapshot** and **Restore snapshot…**. Recovery behavior and safeguards are unchanged.
 
+v1.8.2 adds guarded rate-limit handling while Continuity is ON. It recognizes only known rate-limit dialog text, auto-dismisses only exact safe acknowledgement labels such as **Got it / Understood / เข้าใจแล้ว**, and refuses dialogs containing delete, payment, permission, or approval cues. After detection it pauses automatic Retry/Continue plus request-generating Continuity actions, shows **Rate Limit: COOLING m:ss**, and applies escalating local backoff of 3 → 6 → 10 minutes for repeated detections within 30 minutes. Recovery backup/restore remains local and available.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.
