@@ -9567,6 +9567,7 @@
         <button type="button" data-uaios-action="toggle">Continuity OFF</button>
         <span data-uaios-version>v${UAIOS_CONTINUITY_VERSION}</span>
         <span data-uaios-bridge="unknown">Bridge: …</span>
+        <span data-uaios-state="wait">State: WAIT</span>
         <span data-uaios-load="normal">Load: unknown</span>
         <button type="button" data-uaios-action="checkpoint">Checkpoint</button>
         <button type="button" data-uaios-action="handoff">New Chat Handoff</button>
