@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.6.2
+// @version      1.6.3
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -86,6 +86,7 @@
    * listener 或 conversation 狀態。
    */
   const EXPORT_BUTTON_LISTENER_VERSION = '1.2.0';
+  const EXPORT_HEADER_BUTTONS_ENABLED = false;
   /*
    * 兩個按鈕的 DOM id。
    *
@@ -4647,6 +4648,10 @@
    * ChatGPT header 若因 SPA 導航或 React 重繪被重建，下一次 ensureButtonsSoon() 會把按鈕放回正確位置。
    */
   function insertButtonsOnce() {
+    if (!EXPORT_HEADER_BUTTONS_ENABLED) {
+      removeButtonsIfNeeded();
+      return;
+    }
     if (!isConversationPage()) {
       removeButtonsIfNeeded();
       return;
@@ -9079,7 +9084,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.6.2';
+  const UAIOS_CONTINUITY_VERSION = '1.6.3';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9092,6 +9097,7 @@
   const UAIOS_STAGED_HANDOFF_WAIT_MS = 4000;
   let uaiosAutoCheckpointTimer = null;
   let uaiosCheckpointInFlight = false;
+  let uaiosExportInFlight = false;
   let uaiosPanelNoteTimer = null;
   let uaiosBridgeHealth = 'unknown';
 
@@ -9470,6 +9476,24 @@
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-load="high"],
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-load="critical"] { font-weight: 700; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-note] { flex-basis: 100%; opacity: .78; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] { position: relative; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] > summary {
+        list-style: none; border: 1px solid rgba(127,127,127,.25); border-radius: 9px;
+        padding: 6px 10px; background: var(--main-surface-secondary, #f4f4f4);
+        color: inherit; cursor: pointer; user-select: none; font-weight: 700;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] > summary::-webkit-details-marker { display: none; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more-menu] {
+        position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 2;
+        min-width: 210px; padding: 8px; border: 1px solid rgba(127,127,127,.28);
+        border-radius: 12px; background: var(--main-surface-primary, #fff);
+        box-shadow: 0 8px 24px rgba(0,0,0,.16);
+        display: grid; gap: 6px;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more-menu] [data-uaios-menu-title] {
+        padding: 2px 4px 4px; opacity: .66; font-size: 11px; font-weight: 700;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more-menu] button { width: 100%; text-align: left; }
       @media (max-width: 700px) { #${UAIOS_CONTINUITY_PANEL_ID} { left: 10px; right: 10px; bottom: 72px; } }
     `;
     (document.head || document.documentElement).appendChild(style);
@@ -9606,6 +9630,8 @@
     const checkpoint = panel.querySelector('[data-uaios-action="checkpoint"]');
     const handoff = panel.querySelector('[data-uaios-action="handoff"]');
     const resume = panel.querySelector('[data-uaios-action="resume"]');
+    const exportRaw = panel.querySelector('[data-uaios-action="export-raw"]');
+    const exportHandoff = panel.querySelector('[data-uaios-action="export-handoff"]');
     toggle.textContent = enabled ? 'Continuity ON' : 'Continuity OFF';
     toggle.dataset.uaiosStatus = enabled ? 'on' : 'off';
     bridgeEl.textContent = `Bridge: ${uaiosBridgeHealth === 'ok' ? 'OK' : uaiosBridgeHealth === 'fail' ? 'FAIL' : '…'}`;
@@ -9620,12 +9646,46 @@
     const generationActive = uaiosContinuityGenerationInProgress();
     checkpoint.disabled = uaiosCheckpointInFlight || generationActive || !isConversationPage();
     handoff.disabled = uaiosCheckpointInFlight || generationActive || !isConversationPage();
+    if (exportRaw) exportRaw.disabled = uaiosExportInFlight || generationActive || !isConversationPage();
+    if (exportHandoff) exportHandoff.disabled = uaiosExportInFlight || generationActive || !isConversationPage();
     resume.hidden = !pending || isConversationPage();
   }
   async function uaiosContinuityHandlePanelAction(action) {
     if (action === 'toggle') {
       uaiosWatchdogSetEnabled(!uaiosWatchdogIsEnabled());
       uaiosContinuityRenderPanel();
+      return;
+    }
+    if (action === 'export-raw' || action === 'export-handoff') {
+      if (uaiosExportInFlight) return;
+      const panel = document.getElementById(UAIOS_CONTINUITY_PANEL_ID);
+      const more = panel?.querySelector('[data-uaios-more]');
+      if (more) more.open = false;
+      const conversationId = getConversationIdFromUrl();
+      if (!conversationId) {
+        uaiosContinuitySetPanelNote('Open a saved ChatGPT conversation before exporting.', 'warn');
+        return;
+      }
+      uaiosExportInFlight = true;
+      uaiosContinuityRenderPanel();
+      const isRaw = action === 'export-raw';
+      uaiosContinuitySetPanelNote(isRaw ? 'Exporting Raw JSON…' : 'Exporting Handoff JSON…', 'info');
+      try {
+        assertConversationStillCurrent(conversationId, 'export start');
+        if (isRaw) {
+          await exportRawConversationFiles(conversationId, () => {});
+        } else {
+          await exportHandoffFile(conversationId, () => {});
+        }
+        assertConversationStillCurrent(conversationId, 'export finish');
+        uaiosContinuitySetPanelNote(isRaw ? 'Raw JSON download started.' : 'Handoff JSON download started.', 'success');
+      } catch (error) {
+        logError(isRaw ? 'Raw JSON export failed.' : 'Handoff JSON export failed.', error);
+        uaiosContinuitySetPanelNote(`Export failed: ${toErrorMessage(error)}`, 'error');
+      } finally {
+        uaiosExportInFlight = false;
+        uaiosContinuityRenderPanel();
+      }
       return;
     }
     if (action === 'checkpoint') {
@@ -9684,6 +9744,14 @@
         <span data-uaios-load="normal">Load: unknown</span>
         <button type="button" data-uaios-action="checkpoint">Checkpoint</button>
         <button type="button" data-uaios-action="handoff">New Chat Handoff</button>
+        <details data-uaios-more>
+          <summary aria-label="More Continuity actions" title="More actions">⋯</summary>
+          <div data-uaios-more-menu role="menu">
+            <div data-uaios-menu-title>Advanced / Export</div>
+            <button type="button" data-uaios-action="export-raw" role="menuitem">Download Raw JSON</button>
+            <button type="button" data-uaios-action="export-handoff" role="menuitem">Download Handoff JSON</button>
+          </div>
+        </details>
         <button type="button" data-uaios-action="resume" hidden>Resume Handoff</button>
         <span data-uaios-note aria-live="polite"></span>
       `;
