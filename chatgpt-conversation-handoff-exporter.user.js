@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.6.3
+// @version      1.6.4
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9084,7 +9084,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.6.3';
+  const UAIOS_CONTINUITY_VERSION = '1.6.4';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9554,6 +9554,8 @@
     if (!handle) return;
     panel.dataset.uaiosDragReady = 'true';
     let drag = null;
+    let lastHandleClickAt = 0;
+    let lastHandleClickPoint = null;
 
     handle.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
@@ -9561,11 +9563,13 @@
       drag = {
         pointerId: event.pointerId,
         offsetX: event.clientX - rect.left,
-        offsetY: event.clientY - rect.top
+        offsetY: event.clientY - rect.top,
+        startX: event.clientX,
+        startY: event.clientY
       };
       panel.dataset.uaiosDragging = 'true';
       try { handle.setPointerCapture(event.pointerId); } catch (_) {}
-      event.preventDefault();
+      // Keep compatibility mouse events enabled; reset is also handled from pointer releases.
     });
 
     handle.addEventListener('pointermove', (event) => {
@@ -9581,7 +9585,26 @@
 
     const finishDrag = (event) => {
       if (!drag || event.pointerId !== drag.pointerId) return;
-      uaiosContinuitySavePanelPosition(panel);
+      const moved = event.type === 'pointercancel' ||
+        Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 6;
+      if (moved) {
+        uaiosContinuitySavePanelPosition(panel);
+        lastHandleClickAt = 0;
+        lastHandleClickPoint = null;
+      } else {
+        const now = Date.now();
+        const closeEnough = lastHandleClickPoint &&
+          Math.hypot(event.clientX - lastHandleClickPoint.x, event.clientY - lastHandleClickPoint.y) <= 8;
+        if (lastHandleClickAt && now - lastHandleClickAt <= 450 && closeEnough) {
+          uaiosContinuityResetPanelPosition(panel);
+          lastHandleClickAt = 0;
+          lastHandleClickPoint = null;
+        } else {
+          uaiosContinuitySavePanelPosition(panel);
+          lastHandleClickAt = now;
+          lastHandleClickPoint = { x: event.clientX, y: event.clientY };
+        }
+      }
       drag = null;
       delete panel.dataset.uaiosDragging;
       try { handle.releasePointerCapture(event.pointerId); } catch (_) {}
