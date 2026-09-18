@@ -23,7 +23,7 @@ $beforeHandles = @(
 )
 
 $targetUrl = "chrome://extensions/?id=$ExtensionId"
-Start-Process -FilePath $chrome -ArgumentList @('--new-window', $targetUrl) | Out-Null
+Start-Process -FilePath $chrome -ArgumentList @('--new-window', 'about:blank') | Out-Null
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $helperProcess = $null
 while ((Get-Date) -lt $deadline -and -not $helperProcess) {
@@ -42,11 +42,36 @@ if (-not $helperProcess) {
 
 $helperHandle = [IntPtr]$helperProcess.MainWindowHandle
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($helperHandle)
+$addressCondition = New-Object System.Windows.Automation.AndCondition(
+  (New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Edit
+  )),
+  (New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    'Address and search bar'
+  ))
+)
+$address = $root.FindFirst(
+  [System.Windows.Automation.TreeScope]::Descendants,
+  $addressCondition
+)
+if (-not $address) {
+  throw 'Safe reload aborted: Address bar was not found in the dedicated helper window.'
+}
+$valuePattern = $address.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+$valuePattern.SetValue($targetUrl)
+$address.SetFocus()
+$wsh = New-Object -ComObject WScript.Shell
+[void]$wsh.AppActivate($helperProcess.Id)
+Start-Sleep -Milliseconds 150
+$wsh.SendKeys('{ENTER}')
+$deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $documentCondition = New-Object System.Windows.Automation.PropertyCondition(
   [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
   [System.Windows.Automation.ControlType]::Document
 )
-$reloadCondition = New-Object System.Windows.Automation.AndCondition(
+$reloadIdCondition = New-Object System.Windows.Automation.AndCondition(
   (New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
     [System.Windows.Automation.ControlType]::Button
@@ -56,24 +81,36 @@ $reloadCondition = New-Object System.Windows.Automation.AndCondition(
     'dev-reload-button'
   ))
 )
-$extensionDocument = $null
+$reloadNameCondition = New-Object System.Windows.Automation.AndCondition(
+  (New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Button
+  )),
+  (New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::NameProperty,
+    'Reload'
+  ))
+)
 $reload = $null
 while ((Get-Date) -lt $deadline -and -not $reload) {
-  $documents = $root.FindAll(
+  $reload = $root.FindFirst(
     [System.Windows.Automation.TreeScope]::Descendants,
-    $documentCondition
+    $reloadIdCondition
   )
-  for ($i = 0; $i -lt $documents.Count -and -not $extensionDocument; $i++) {
-    $candidate = $documents.Item($i)
-    if ($candidate.Current.Name -like 'Extensions - ChatGPT Continuity Manager*') {
-      $extensionDocument = $candidate
-    }
-  }
-  if ($extensionDocument) {
-    $reload = $extensionDocument.FindFirst(
+  if (-not $reload) {
+    $documents = $root.FindAll(
       [System.Windows.Automation.TreeScope]::Descendants,
-      $reloadCondition
+      $documentCondition
     )
+    for ($i = 0; $i -lt $documents.Count -and -not $reload; $i++) {
+      $candidate = $documents.Item($i)
+      if ($candidate.Current.Name -like 'Extensions*') {
+        $reload = $candidate.FindFirst(
+          [System.Windows.Automation.TreeScope]::Descendants,
+          $reloadNameCondition
+        )
+      }
+    }
   }
   if (-not $reload) { Start-Sleep -Milliseconds 200 }
 }
