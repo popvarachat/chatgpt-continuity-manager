@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.6.4
+// @version      1.7.0
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8749,6 +8749,10 @@
   const UAIOS_CHECKPOINT_MESSAGE_LIMIT = 12;
   const UAIOS_CHECKPOINT_MESSAGE_CHARS = 4000;
   const UAIOS_CHECKPOINT_ARRAY_LIMIT = 50;
+  const UAIOS_RECOVERY_DB_NAME = 'uaios-continuity-recovery-v1';
+  const UAIOS_RECOVERY_DB_VERSION = 1;
+  const UAIOS_RECOVERY_STORE = 'checkpointHistory';
+  const UAIOS_RECOVERY_HISTORY_LIMIT = 20;
 
   function uaiosContinuityReadObject(key) {
     try {
@@ -8761,6 +8765,140 @@
 
   function uaiosContinuityWriteObject(key, value) {
     localStorage.setItem(key, JSON.stringify(value));
+  }
+
+  function uaiosContinuityRecoveryRequest(request) {
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('IndexedDB request failed.'));
+    });
+  }
+
+  function uaiosContinuityRecoveryTxDone(transaction) {
+    return new Promise((resolve, reject) => {
+      transaction.oncomplete = () => resolve(true);
+      transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted.'));
+      transaction.onerror = () => reject(transaction.error || new Error('IndexedDB transaction failed.'));
+    });
+  }
+
+  function uaiosContinuityOpenRecoveryDb() {
+    return new Promise((resolve, reject) => {
+      if (!window.indexedDB) {
+        reject(new Error('IndexedDB is unavailable in this browser context.'));
+        return;
+      }
+      const request = window.indexedDB.open(UAIOS_RECOVERY_DB_NAME, UAIOS_RECOVERY_DB_VERSION);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        let store;
+        if (!db.objectStoreNames.contains(UAIOS_RECOVERY_STORE)) {
+          store = db.createObjectStore(UAIOS_RECOVERY_STORE, { keyPath: 'id' });
+        } else {
+          store = request.transaction.objectStore(UAIOS_RECOVERY_STORE);
+        }
+        if (!store.indexNames.contains('scope')) store.createIndex('scope', 'scope', { unique: false });
+        if (!store.indexNames.contains('captured_at')) store.createIndex('captured_at', 'captured_at', { unique: false });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('Unable to open recovery history database.'));
+      request.onblocked = () => reject(new Error('Recovery history database upgrade is blocked by another tab.'));
+    });
+  }
+
+  function uaiosContinuityRecoveryClone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function uaiosContinuityRecoveryId(record) {
+    return [record?.scope || 'general', record?.captured_at || new Date().toISOString(), record?.source_conversation_id || 'unknown'].join('::');
+  }
+
+  async function uaiosContinuityRecoveryList(scope = uaiosContinuityScopeId()) {
+    const db = await uaiosContinuityOpenRecoveryDb();
+    try {
+      const transaction = db.transaction(UAIOS_RECOVERY_STORE, 'readonly');
+      const done = uaiosContinuityRecoveryTxDone(transaction);
+      const rows = await uaiosContinuityRecoveryRequest(
+        transaction.objectStore(UAIOS_RECOVERY_STORE).index('scope').getAll(scope)
+      );
+      await done;
+      return (Array.isArray(rows) ? rows : [])
+        .sort((a, b) => String(b?.captured_at || '').localeCompare(String(a?.captured_at || '')));
+    } finally {
+      db.close();
+    }
+  }
+
+  async function uaiosContinuityRecoverySave(record) {
+    const entry = {
+      ...uaiosContinuityRecoveryClone(record),
+      id: uaiosContinuityRecoveryId(record),
+      recovery_saved_at: new Date().toISOString()
+    };
+    let db = await uaiosContinuityOpenRecoveryDb();
+    try {
+      const transaction = db.transaction(UAIOS_RECOVERY_STORE, 'readwrite');
+      const done = uaiosContinuityRecoveryTxDone(transaction);
+      await uaiosContinuityRecoveryRequest(transaction.objectStore(UAIOS_RECOVERY_STORE).put(entry));
+      await done;
+    } finally {
+      db.close();
+    }
+
+    const history = await uaiosContinuityRecoveryList(record.scope);
+    const overflow = history.slice(UAIOS_RECOVERY_HISTORY_LIMIT);
+    if (overflow.length) {
+      db = await uaiosContinuityOpenRecoveryDb();
+      try {
+        const transaction = db.transaction(UAIOS_RECOVERY_STORE, 'readwrite');
+        const done = uaiosContinuityRecoveryTxDone(transaction);
+        const store = transaction.objectStore(UAIOS_RECOVERY_STORE);
+        for (const stale of overflow) store.delete(stale.id);
+        await done;
+      } finally {
+        db.close();
+      }
+    }
+    uaiosWatchdogRecordEvent('recovery_history_saved', {
+      scope: record.scope,
+      retained: Math.min(history.length, UAIOS_RECOVERY_HISTORY_LIMIT)
+    });
+    return entry;
+  }
+
+  function uaiosContinuityDownloadJson(filename, payload) {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.style.display = 'none';
+    (document.body || document.documentElement).appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function uaiosContinuityExportRecoverySnapshot() {
+    const scope = uaiosContinuityScopeId();
+    const latest = uaiosContinuityLatestCheckpoint();
+    if (!latest) throw new Error('No checkpoint exists for the current continuity scope.');
+    const history = await uaiosContinuityRecoveryList(scope);
+    const bundle = {
+      schema_version: 1,
+      continuity_version: UAIOS_CONTINUITY_VERSION,
+      exported_at: new Date().toISOString(),
+      scope,
+      project_state: latest.project_state || uaiosContinuityGetState(),
+      latest_checkpoint: latest,
+      history: history.slice(0, UAIOS_RECOVERY_HISTORY_LIMIT)
+    };
+    const safeScope = String(scope || 'general').replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'general';
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    uaiosContinuityDownloadJson(`uaios-recovery-${safeScope}-${stamp}.json`, bundle);
+    uaiosWatchdogRecordEvent('recovery_snapshot_exported', { scope, checkpoints: bundle.history.length });
+    return bundle;
   }
 
   function uaiosContinuityScopeId() {
@@ -8978,6 +9116,12 @@
       conversationId: record.source_conversation_id,
       totalMessages: record.total_message_count
     });
+    void uaiosContinuityRecoverySave(record).catch((error) => {
+      uaiosWatchdogRecordEvent('recovery_history_save_failed', {
+        scope: record.scope,
+        message: toErrorMessage(error)
+      });
+    });
     return record;
   }
   async function uaiosContinuityCheckpointNow() {
@@ -9084,7 +9228,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.6.4';
+  const UAIOS_CONTINUITY_VERSION = '1.7.0';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9655,6 +9799,7 @@
     const resume = panel.querySelector('[data-uaios-action="resume"]');
     const exportRaw = panel.querySelector('[data-uaios-action="export-raw"]');
     const exportHandoff = panel.querySelector('[data-uaios-action="export-handoff"]');
+    const exportRecovery = panel.querySelector('[data-uaios-action="export-recovery"]');
     toggle.textContent = enabled ? 'Continuity ON' : 'Continuity OFF';
     toggle.dataset.uaiosStatus = enabled ? 'on' : 'off';
     bridgeEl.textContent = `Bridge: ${uaiosBridgeHealth === 'ok' ? 'OK' : uaiosBridgeHealth === 'fail' ? 'FAIL' : '…'}`;
@@ -9671,12 +9816,37 @@
     handoff.disabled = uaiosCheckpointInFlight || generationActive || !isConversationPage();
     if (exportRaw) exportRaw.disabled = uaiosExportInFlight || generationActive || !isConversationPage();
     if (exportHandoff) exportHandoff.disabled = uaiosExportInFlight || generationActive || !isConversationPage();
+    if (exportRecovery) exportRecovery.disabled = uaiosExportInFlight || generationActive || !uaiosContinuityLatestCheckpoint();
     resume.hidden = !pending || isConversationPage();
   }
   async function uaiosContinuityHandlePanelAction(action) {
     if (action === 'toggle') {
       uaiosWatchdogSetEnabled(!uaiosWatchdogIsEnabled());
       uaiosContinuityRenderPanel();
+      return;
+    }
+    if (action === 'export-recovery') {
+      if (uaiosExportInFlight) return;
+      const panel = document.getElementById(UAIOS_CONTINUITY_PANEL_ID);
+      const more = panel?.querySelector('[data-uaios-more]');
+      if (more) more.open = false;
+      if (!uaiosContinuityLatestCheckpoint()) {
+        uaiosContinuitySetPanelNote('Save a Checkpoint before exporting recovery history.', 'warn');
+        return;
+      }
+      uaiosExportInFlight = true;
+      uaiosContinuityRenderPanel();
+      uaiosContinuitySetPanelNote('Building recovery snapshot…', 'info');
+      try {
+        const bundle = await uaiosContinuityExportRecoverySnapshot();
+        uaiosContinuitySetPanelNote(`Recovery snapshot downloaded: ${bundle.history.length} checkpoints.`, 'success');
+      } catch (error) {
+        uaiosWatchdogRecordEvent('recovery_snapshot_export_failed', { message: toErrorMessage(error) });
+        uaiosContinuitySetPanelNote(`Recovery export failed: ${toErrorMessage(error)}`, 'error');
+      } finally {
+        uaiosExportInFlight = false;
+        uaiosContinuityRenderPanel();
+      }
       return;
     }
     if (action === 'export-raw' || action === 'export-handoff') {
@@ -9773,6 +9943,8 @@
             <div data-uaios-menu-title>Advanced / Export</div>
             <button type="button" data-uaios-action="export-raw" role="menuitem">Download Raw JSON</button>
             <button type="button" data-uaios-action="export-handoff" role="menuitem">Download Handoff JSON</button>
+            <div data-uaios-menu-title>Recovery</div>
+            <button type="button" data-uaios-action="export-recovery" role="menuitem">Download Recovery Snapshot</button>
           </div>
         </details>
         <button type="button" data-uaios-action="resume" hidden>Resume Handoff</button>
@@ -9861,6 +10033,8 @@
       buildBootstrap: uaiosContinuityBuildBootstrap,
       copyBootstrap: uaiosContinuityCopyBootstrap,
       clearCheckpoint: uaiosContinuityClearCheckpoint,
+      recoveryHistory: () => uaiosContinuityRecoveryList(),
+      exportRecoverySnapshot: uaiosContinuityExportRecoverySnapshot,
       loadAssessment: uaiosContinuityLoadAssessment,
       prepareRollover: uaiosContinuityPrepareRollover,
       pendingRollover: uaiosContinuityGetPendingRollover,
