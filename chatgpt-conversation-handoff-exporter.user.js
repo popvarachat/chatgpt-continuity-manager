@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.5.7
+// @version      1.5.8
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8938,7 +8938,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.5.7';
+  const UAIOS_CONTINUITY_VERSION = '1.5.8';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9062,44 +9062,77 @@
   }
 
   async function uaiosContinuityFillComposer(text) {
-    const composer = uaiosContinuityFindComposer();
-    if (!composer || !text) return false;
-    composer.focus();
-    if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
-      const proto = composer instanceof HTMLTextAreaElement
-        ? HTMLTextAreaElement.prototype
-        : HTMLInputElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-      if (setter) setter.call(composer, text);
-      else composer.value = text;
-      composer.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        inputType: 'insertText',
-        data: text
-      }));
-    } else {
-      let inserted = false;
+    if (!text) return false;
+    const expected = String(text).trim();
+    const looksHydrated = () => {
+      const current = uaiosContinuityFindComposer();
+      const observed = uaiosContinuityComposerText(current).trim();
+      return Boolean(
+        current &&
+        observed.startsWith('UAIOS CONTINUITY BOOTSTRAP') &&
+        observed.length >= Math.min(120, expected.length)
+      );
+    };
+    const insertOnce = () => {
+      const composer = uaiosContinuityFindComposer();
+      if (!composer) return false;
+      composer.focus();
+      if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
+        const proto = composer instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (setter) setter.call(composer, text);
+        else composer.value = text;
+        composer.dispatchEvent(new InputEvent('input', {
+          bubbles: true,
+          composed: true,
+          inputType: 'insertText',
+          data: text
+        }));
+        return true;
+      }
       try {
         const selection = window.getSelection();
         const range = document.createRange();
         range.selectNodeContents(composer);
         selection?.removeAllRanges();
         selection?.addRange(range);
-        inserted = Boolean(document.execCommand?.('insertText', false, text));
-      } catch (_) {}
-      if (!inserted) {
-        composer.replaceChildren(document.createTextNode(text));
-        composer.dispatchEvent(new InputEvent('input', {
+        composer.dispatchEvent(new InputEvent('beforeinput', {
           bubbles: true,
+          composed: true,
+          cancelable: true,
           inputType: 'insertText',
           data: text
         }));
+        if (document.execCommand?.('insertText', false, text)) return true;
+      } catch (_) {}
+      composer.replaceChildren(document.createTextNode(text));
+      composer.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        composed: true,
+        inputType: 'insertText',
+        data: text
+      }));
+      return true;
+    };
+
+    // ChatGPT/React can briefly accept a DOM write and then reconcile it away.
+    // Require the bootstrap to survive multiple render cycles before declaring success.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (!insertOnce()) return false;
+      let stable = true;
+      for (const delay of [180, 650, 1400]) {
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+        if (!looksHydrated()) {
+          stable = false;
+          break;
+        }
       }
+      if (stable) return true;
+      await new Promise((resolve) => window.setTimeout(resolve, 300));
     }
-    await new Promise((resolve) => window.setTimeout(resolve, 150));
-    const observed = uaiosContinuityComposerText(composer).trim();
-    return observed.startsWith('UAIOS CONTINUITY BOOTSTRAP')
-      && observed.length >= Math.min(120, String(text).trim().length);
+    return false;
   }
 
   function uaiosContinuityProjectLandingUrl(scope = uaiosContinuityScopeId()) {
