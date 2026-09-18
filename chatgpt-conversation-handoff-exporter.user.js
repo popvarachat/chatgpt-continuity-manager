@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.7.1
+// @version      1.7.2
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9022,8 +9022,16 @@
     return explicit || uaiosContinuitySignalText(message, 1800);
   }
 
+  function uaiosContinuityIsBootstrapMessage(message) {
+    if (message?.role !== 'user') return false;
+    const text = String(message?.content || '').trimStart();
+    return text.startsWith('UAIOS CONTINUITY BOOTSTRAP') && text.includes('BOUNDED CONTINUITY PAYLOAD');
+  }
+
   function uaiosContinuityDeriveProjectState(messages = [], title = '') {
-    const recent = Array.isArray(messages) ? messages.slice(-12) : [];
+    const recent = (Array.isArray(messages) ? messages : [])
+      .filter((message) => !uaiosContinuityIsBootstrapMessage(message))
+      .slice(-12);
     const linesByRole = recent.flatMap((message, messageIndex) => {
       const role = String(message?.role || 'unknown');
       return String(message?.content || '')
@@ -9262,6 +9270,36 @@
     ].join('\n');
   }
 
+  function uaiosContinuityUpgradeLegacyBootstrap(text) {
+    const raw = String(text || '');
+    const marker = '\nBOUNDED CONTINUITY PAYLOAD\n';
+    const markerIndex = raw.indexOf(marker);
+    if (markerIndex < 0) return raw;
+    try {
+      const payload = JSON.parse(raw.slice(markerIndex + marker.length));
+      const source = String(payload?.project_state?.state_source || '');
+      if (source.includes('autopilot-v2')) return raw;
+      const autoState = uaiosContinuityDeriveProjectState(payload?.recent_messages || [], payload?.title || '');
+      const projectState = uaiosContinuityMergeProjectState(autoState, uaiosContinuityGetState());
+      payload.project_state = projectState;
+      return [
+        'UAIOS CONTINUITY BOOTSTRAP',
+        'Use the Project State Snapshot for orientation, then use recent evidence and canonical sources to verify mutable status.',
+        'Do not assume old branch/PR/workflow status is still current solely because it appears below.',
+        'If project_state is missing or stale, reconstruct a provisional project state from recent_messages before continuing.',
+        'Prioritize the latest explicit user goal, completed work, blockers, decisions, verified evidence, and next action.',
+        'Do not ask the user to repeat context already present in this bootstrap. Continue when the next action is clear.',
+        '',
+        uaiosContinuityFormatProjectState(projectState),
+        '',
+        'BOUNDED CONTINUITY PAYLOAD',
+        JSON.stringify(payload, null, 2)
+      ].join('\n');
+    } catch (_) {
+      return raw;
+    }
+  }
+
   async function uaiosContinuityCopyBootstrap() {
     const text = uaiosContinuityBuildBootstrap();
     if (!text) throw new Error('No checkpoint exists for the current continuity scope.');
@@ -9287,7 +9325,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.7.1';
+  const UAIOS_CONTINUITY_VERSION = '1.7.2';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9567,6 +9605,15 @@
     if (pending.handoff_state === 'staged') {
       const createdAt = Date.parse(pending.created_at || '');
       if (Number.isFinite(createdAt) && Date.now() - createdAt < UAIOS_STAGED_HANDOFF_WAIT_MS) return false;
+    }
+    const upgradedBootstrap = uaiosContinuityUpgradeLegacyBootstrap(pending.bootstrap);
+    if (upgradedBootstrap && upgradedBootstrap !== pending.bootstrap) {
+      pending = uaiosContinuitySetPendingRollover({ ...pending, bootstrap: upgradedBootstrap });
+      void uaiosContinuityBridgeRequest('savePending', { record: pending }, 1200);
+      uaiosWatchdogRecordEvent('legacy_bootstrap_upgraded', {
+        scope: pending.scope,
+        sourceConversationId: pending.source_conversation_id
+      });
     }
     if (!await uaiosContinuityFillComposer(pending.bootstrap)) {
       uaiosWatchdogRecordEvent('rollover_bootstrap_fill_failed', {

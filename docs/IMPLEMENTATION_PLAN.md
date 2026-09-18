@@ -64,3 +64,4 @@ Acceptance: browser-side module works fully local when the adapter is disabled, 
 - Phase 3B remains: tune heuristic thresholds from real usage and add explicit import/manual restore tooling after recovery export is validated.
 
 - Phase 3B.2: v1.7.1 upgrades Project State Autopilot to v2. It prefers the newest 12 messages, treats the latest assistant PASS/resolution as the blocker freshness boundary, and extracts the next action from the latest assistant response with English/Thai action cues. Goal: resolved historical failures do not reappear as current blockers after handoff.
+- Phase 3B.3: v1.7.2 prevents bootstrap self-reference by excluding continuity bootstrap messages from state derivation and upgrading pending legacy bootstrap payloads to Autopilot v2 before hydration.

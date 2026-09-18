@@ -27,11 +27,17 @@ for (const name of [
   'uaiosContinuityLastSignal',
   'uaiosContinuityResolutionBoundary',
   'uaiosContinuityNextActionFromAssistant',
+  'uaiosContinuityIsBootstrapMessage',
   'uaiosContinuityDeriveProjectState'
 ]) {
   harness += extractFunction(name) + '\n';
 }
 harness += 'globalThis.derive = uaiosContinuityDeriveProjectState;\n';
+harness += "function uaiosContinuityGetState() { return null; }\n";
+harness += "function uaiosContinuityMergeProjectState(autoState) { return autoState; }\n";
+harness += "function uaiosContinuityFormatProjectState(state) { return 'PROJECT STATE SNAPSHOT\\nSource: ' + (state.state_source || 'unknown'); }\n";
+harness += extractFunction('uaiosContinuityUpgradeLegacyBootstrap') + '\n';
+harness += 'globalThis.upgrade = uaiosContinuityUpgradeLegacyBootstrap;\n';
 
 const context = { console };
 vm.createContext(context);
@@ -59,5 +65,46 @@ const activeBlocker = context.derive(
   'แนะนำระบบแก้หมดเวลา'
 );
 assert.ok(activeBlocker.blockers.some((item) => /bug composer hydration/i.test(item)), 'new blocker after PASS must remain visible');
+
+const nestedBootstrap = context.derive(
+  [
+    ...baseMessages,
+    {
+      role: 'user',
+      content: 'UAIOS CONTINUITY BOOTSTRAP\nPROJECT STATE SNAPSHOT\nSource: autopilot-v1\nObjective: stale objective\nBOUNDED CONTINUITY PAYLOAD\n{}'
+    },
+    {
+      role: 'assistant',
+      content: 'ตอนนี้ v1.7.1 ผ่านแล้ว ✅\nขั้นต่อไป: ตรวจ acceptance ใหม่โดยไม่ดึง bootstrap เก่ามาเป็น objective'
+    }
+  ],
+  'Conversation Continuity Protocol'
+);
+assert.doesNotMatch(nestedBootstrap.objective, /UAIOS CONTINUITY BOOTSTRAP/i, 'bootstrap handoff text must never become the project objective');
+assert.doesNotMatch(nestedBootstrap.objective, /stale objective/i, 'nested stale objective must be ignored');
+assert.match(nestedBootstrap.phase, /v1\.7\.1/i);
+assert.match(nestedBootstrap.next_action, /acceptance/i);
+
+
+const legacyPayload = {
+  schema_version: 1,
+  title: 'Legacy handoff',
+  project_state: { state_source: 'autopilot-v1', objective: 'stale legacy objective' },
+  recent_messages: [
+    { role: 'user', content: 'Continue the actual project from the verified state.' },
+    { role: 'assistant', content: 'Resolved and PASS. Next step: verify v1.7.2 acceptance.' }
+  ]
+};
+const legacyBootstrap = 'UAIOS CONTINUITY BOOTSTRAP\nPROJECT STATE SNAPSHOT\nSource: autopilot-v1\n\nBOUNDED CONTINUITY PAYLOAD\n' + JSON.stringify(legacyPayload);
+const upgradedBootstrap = context.upgrade(legacyBootstrap);
+assert.notEqual(upgradedBootstrap, legacyBootstrap, 'legacy bootstrap must be rewritten before hydration');
+const upgradedPayload = JSON.parse(upgradedBootstrap.split('\nBOUNDED CONTINUITY PAYLOAD\n')[1]);
+assert.equal(upgradedPayload.project_state.state_source, 'autopilot-v2', 'legacy bootstrap must upgrade project state to autopilot-v2');
+assert.doesNotMatch(upgradedPayload.project_state.objective || '', /stale legacy objective/i);
+const currentBootstrap = 'UAIOS CONTINUITY BOOTSTRAP\nBOUNDED CONTINUITY PAYLOAD\n' + JSON.stringify({
+  ...legacyPayload,
+  project_state: { state_source: 'autopilot-v2', objective: 'current objective' }
+});
+assert.equal(context.upgrade(currentBootstrap), currentBootstrap, 'current autopilot-v2 bootstrap must remain unchanged');
 
 console.log('project state autopilot v2 behavioral tests: PASS');

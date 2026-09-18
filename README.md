@@ -453,3 +453,5 @@ In v1.4.0, only the short-lived pending handoff record is mirrored into `chrome.
 ### Project State Autopilot v2 (v1.7.1)
 
 v1.7.1 sharpens handoff state quality after cross-chat transport is already healthy. The derivation window is reduced to the newest 12 messages, the latest assistant PASS/resolution becomes a status boundary for unresolved blockers, and next-action extraction recognizes both English and Thai action cues. This prevents already-resolved FAIL/blocker lines from older troubleshooting turns from resurfacing in a new-chat Project State Snapshot.
+
+v1.7.2 prevents continuity bootstrap self-reference. Synthetic `UAIOS CONTINUITY BOOTSTRAP` user messages are excluded from Project State derivation, and pending legacy bootstrap payloads are upgraded to Autopilot v2 before composer hydration. This prevents the continuity capsule itself from recursively becoming the next objective, blocker set, or current task.
