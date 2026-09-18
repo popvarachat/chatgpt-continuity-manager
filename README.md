@@ -432,6 +432,8 @@ In v1.6.3, the normal conversation header no longer shows the upstream Chinese *
 
 In v1.7.0, every successful checkpoint is also copied to a local-only **IndexedDB recovery history**, bounded to the newest 20 checkpoints per continuity scope. This history is best-effort and never blocks the existing latest checkpoint or handoff path. Use **⋯ → Recovery → Download Recovery Snapshot** to export the current Project state, latest checkpoint, and bounded checkpoint history as JSON for manual recovery.
 
+v1.8.0 completes the manual recovery loop with **⋯ → Recovery → Import Recovery Snapshot…**. Import validates schema and Project scope, previews the snapshot, requires explicit confirmation, restores only local Continuity checkpoint/Project State plus bounded IndexedDB history, and never auto-sends or opens a chat. Cross-Project restore is rejected.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.

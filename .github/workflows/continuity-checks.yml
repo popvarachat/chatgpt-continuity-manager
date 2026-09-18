@@ -25,5 +25,6 @@ jobs:
         run: |
           node tests/v130-continuity-static.test.cjs
           node tests/project-state-autopilot-v2.test.cjs
+          node tests/recovery-import-v180.test.cjs
       - name: Manifest parse
         run: node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"
