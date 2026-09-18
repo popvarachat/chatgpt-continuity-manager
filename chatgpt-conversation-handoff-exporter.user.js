@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.7.0
+// @version      1.7.1
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8995,15 +8995,42 @@
     return '';
   }
 
+  function uaiosContinuityResolutionBoundary(linesByRole) {
+    const positivePattern = /(end-to-end\s+pass|e2e\s+pass|cross-chat[^\n]*pass|ผ่านเต็มระบบ|สำเร็จแล้ว|resolved|fixed|\bPASS\b|Bridge:\s*OK|online แล้ว)/i;
+    const negativePattern = /(❌|\bFAIL\b|failed|blocker|error|bug|remaining issue|still failing|ยังไม่ผ่าน|ยังติด|ปัญหา)/i;
+    for (let index = linesByRole.length - 1; index >= 0; index -= 1) {
+      const item = linesByRole[index];
+      if (
+        item?.role === 'assistant' &&
+        positivePattern.test(item.text) &&
+        !negativePattern.test(item.text)
+      ) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  function uaiosContinuityNextActionFromAssistant(message) {
+    const raw = String(message || '');
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => uaiosContinuitySignalText(line, 1600))
+      .filter(Boolean);
+    const actionPattern = /(next action|next step|ขั้นต่อไป|ต่อจาก|ดำเนินการต่อ|ตอนนี้เหลือ|ให้กด|กด\s|แล้วผมจะ|จากนั้น|ทดสอบ.*ต่อ|ตรวจ.*ต่อ|ทำ.*ต่อ)/i;
+    const explicit = [...lines].reverse().find((line) => actionPattern.test(line));
+    return explicit || uaiosContinuitySignalText(message, 1800);
+  }
+
   function uaiosContinuityDeriveProjectState(messages = [], title = '') {
-    const recent = Array.isArray(messages) ? messages.slice(-20) : [];
-    const linesByRole = recent.flatMap((message) => {
+    const recent = Array.isArray(messages) ? messages.slice(-12) : [];
+    const linesByRole = recent.flatMap((message, messageIndex) => {
       const role = String(message?.role || 'unknown');
       return String(message?.content || '')
         .split(/\r?\n/)
         .map((line) => uaiosContinuitySignalText(line))
         .filter((line) => line.length >= 6)
-        .map((text) => ({ role, text }));
+        .map((text, lineIndex) => ({ role, text, messageIndex, lineIndex }));
     });
     const lines = linesByRole.map((item) => item.text);
     const assistantMessages = recent
@@ -9020,28 +9047,60 @@
     const phase = uaiosContinuityLastSignal(lines, /(phase\s*[A-Z0-9._-]+|v\d+\.\d+\.\d+)/i, 300);
     const progress = uaiosContinuityLastSignal(lines, /((progress)[^%]{0,80}\d{1,3}%|\b\d{1,3}%\b)/i, 100);
     const currentTask = latestAssistant || latestSubstantialUser || objective;
-    const nextAction = [...assistantMessages].reverse().find((text) => /(next action|next step|continue|then|after that)/i.test(text)) || latestAssistant;
+    const nextAction = uaiosContinuityNextActionFromAssistant(latestAssistant) || currentTask;
+
+    const resolutionBoundary = uaiosContinuityResolutionBoundary(linesByRole);
+    const unresolvedWindow = resolutionBoundary >= 0 ? linesByRole.slice(resolutionBoundary + 1) : linesByRole.slice(-40);
+    const evidenceWindow = linesByRole.slice(-60);
+
     const completed = uaiosContinuityUniqueSignals(
-      lines.filter((line) => /(✅|\bPASS\b|success|successful|completed|done|\bmerged\b|merge into)/i.test(line)).reverse(), 8
+      evidenceWindow
+        .filter((item) => /(✅|\bPASS\b|success|successful|completed|done|\bmerged\b|merge into|สำเร็จ|ผ่านเต็มระบบ)/i.test(item.text))
+        .map((item) => item.text)
+        .reverse(),
+      8
     ).reverse();
+
     const blockers = uaiosContinuityUniqueSignals(
-      lines.filter((line) => /(❌|\bFAIL\b|failed|blocker|error|bug|remaining issue|still failing)/i.test(line)).reverse(), 6
+      unresolvedWindow
+        .filter((item) => /(❌|\bFAIL\b|failed|blocker|error|bug|remaining issue|still failing|ยังไม่ผ่าน|ยังติด|ปัญหา)/i.test(item.text))
+        .map((item) => item.text)
+        .reverse(),
+      6
     ).reverse();
+
     const decisions = uaiosContinuityUniqueSignals(
-      lines.filter((line) => /(root cause|architecture|decision|changed from|changed to|switch to|use .* instead)/i.test(line)).reverse(), 8
+      evidenceWindow
+        .filter((item) => /(root cause|architecture|decision|changed from|changed to|switch to|use .* instead|ตัดสินใจ|สาเหตุ|แนวทาง)/i.test(item.text))
+        .map((item) => item.text)
+        .reverse(),
+      8
     ).reverse();
+
     const evidence = uaiosContinuityUniqueSignals(
-      lines.filter((line) => /(PR\s*#\d+|commit|main\b|v\d+\.\d+\.\d+|https?:\/\/|Bridge:\s*OK|\b[0-9a-f]{7,40}\b)/i.test(line)).reverse(), 10
+      evidenceWindow
+        .filter((item) => /(PR\s*#\d+|commit|main\b|v\d+\.\d+\.\d+|https?:\/\/|Bridge:\s*OK|\b[0-9a-f]{7,40}\b|HEAD=|CI\b)/i.test(item.text))
+        .map((item) => item.text)
+        .reverse(),
+      10
     ).reverse();
+
     const doNotRedo = uaiosContinuityUniqueSignals(
-      lines.filter((line) => /(do not|don't|must not|avoid repeating|do not redo)/i.test(line)).reverse(), 6
+      evidenceWindow
+        .filter((item) => /(do not|don't|must not|avoid repeating|do not redo|ห้าม|ไม่ต้องทำซ้ำ|อย่าย้อน)/i.test(item.text))
+        .map((item) => item.text)
+        .reverse(),
+      6
     ).reverse();
+
     const confidence = objective && currentTask && (completed.length || evidence.length) ? 'medium-high' : objective ? 'medium' : 'low';
     return uaiosContinuitySanitizeState({
       objective, phase, progress, current_task: currentTask, next_action: nextAction,
       completed, blockers, decisions, evidence, do_not_redo: doNotRedo,
-      notes: 'Auto-derived from bounded recent conversation evidence. Re-verify mutable external status from canonical sources.',
-      state_source: 'autopilot-v1', confidence, generated_at: new Date().toISOString()
+      notes: resolutionBoundary >= 0
+        ? 'Auto-derived from recent conversation evidence after the latest resolved/PASS boundary. Re-verify mutable external status from canonical sources.'
+        : 'Auto-derived from bounded recent conversation evidence. Re-verify mutable external status from canonical sources.',
+      state_source: 'autopilot-v2', confidence, generated_at: new Date().toISOString()
     });
   }
 
@@ -9057,7 +9116,7 @@
         merged[field] = uaiosContinuityUniqueSignals([...manualState[field], ...(Array.isArray(merged[field]) ? merged[field] : [])], 12);
       }
     }
-    merged.state_source = 'manual+autopilot-v1';
+    merged.state_source = 'manual+autopilot-v2';
     merged.manual_updated_at = manualState.updated_at || null;
     merged.generated_at = autoState?.generated_at || new Date().toISOString();
     return uaiosContinuitySanitizeState(merged);
@@ -9228,7 +9287,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.7.0';
+  const UAIOS_CONTINUITY_VERSION = '1.7.1';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';

@@ -62,3 +62,5 @@ Acceptance: browser-side module works fully local when the adapter is disabled, 
 - Phase 3A.5: v1.6.4 makes drag-handle reset robust by detecting two stationary pointer releases within 450 ms and an 8 px proximity threshold, while preserving drag persistence, viewport clamping, and the compact export menu.
 - Phase 3B.1: v1.7.0 adds local-only bounded recovery history in IndexedDB (20 checkpoints per continuity scope) and manual Recovery Snapshot export from the Continuity advanced menu. IndexedDB failures are non-fatal to the existing latest-checkpoint path.
 - Phase 3B remains: tune heuristic thresholds from real usage and add explicit import/manual restore tooling after recovery export is validated.
+
+- Phase 3B.2: v1.7.1 upgrades Project State Autopilot to v2. It prefers the newest 12 messages, treats the latest assistant PASS/resolution as the blocker freshness boundary, and extracts the next action from the latest assistant response with English/Thai action cues. Goal: resolved historical failures do not reappear as current blockers after handoff.

@@ -449,3 +449,7 @@ v1.5.6 verifies that the bootstrap is actually visible in the ChatGPT composer b
 The fresh chat receives current project state, the latest bounded conversation evidence, checkpoint metadata, and a reminder to re-verify mutable external state from canonical sources. No conversation content is sent to an external continuity service.
 
 In v1.4.0, only the short-lived pending handoff record is mirrored into `chrome.storage.local` through an isolated extension bridge. This lets a fresh tab recover the Project destination and bootstrap even when page-local state is unavailable. The bridge record expires after 30 minutes, is cleared after a successful resume, never auto-sends the composer, and is not transmitted off-device.
+
+### Project State Autopilot v2 (v1.7.1)
+
+v1.7.1 sharpens handoff state quality after cross-chat transport is already healthy. The derivation window is reduced to the newest 12 messages, the latest assistant PASS/resolution becomes a status boundary for unresolved blockers, and next-action extraction recognizes both English and Thai action cues. This prevents already-resolved FAIL/blocker lines from older troubleshooting turns from resurfacing in a new-chat Project State Snapshot.
