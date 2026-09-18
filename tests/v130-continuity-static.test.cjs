@@ -6,6 +6,8 @@ const source = fs.readFileSync(path.join(root, 'chatgpt-conversation-handoff-exp
 const bridge = fs.readFileSync(path.join(root, 'continuity-storage-bridge.js'), 'utf8');
 const background = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+const agents = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+const safeReload = fs.readFileSync(path.join(root, 'scripts', 'reload-extension-safe.ps1'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8').replace(/^\uFEFF/, ''));
 
 assert.match(source, /@version\s+1\.6\.4/);
@@ -15,6 +17,11 @@ assert.equal(manifest.background.service_worker, 'background.js');
 assert.equal(manifest.content_scripts[0].world, 'ISOLATED');
 assert.equal(manifest.content_scripts[0].js[0], 'continuity-storage-bridge.js');
 assert.equal(manifest.content_scripts[1].world, 'MAIN');
+assert.match(agents, /Never navigate an existing `chatgpt\.com` tab/);
+assert.match(agents, /scripts\/reload-extension-safe\.ps1/);
+assert.match(safeReload, /--new-window/);
+assert.match(safeReload, /MainWindowHandle -notin \$beforeHandles/);
+assert.match(safeReload, /Safe reload aborted: Chrome did not create a dedicated helper window/);
 assert.match(source, /UAIOS_CONTINUITY_VERSION = '1\.6\.4'/);
 assert.match(source, /UAIOS_BRIDGE_REQUEST_MAILBOX_ID/);
 assert.match(source, /Bridge: /);

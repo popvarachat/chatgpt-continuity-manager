@@ -422,6 +422,8 @@ This fork can be loaded directly in current Chrome without Tampermonkey.
 4. Select the repository folder containing `manifest.json`.
 5. Refresh any open `chatgpt.com` tabs.
 
+For development reloads, do not take over an existing ChatGPT tab to open `chrome://extensions`. Run `scripts/reload-extension-safe.ps1`; it opens a dedicated temporary Chrome window, reloads only this unpacked extension, and closes that helper window. If Chrome cannot isolate a new helper window, the script aborts rather than touching a pre-existing browser window.
+
 The extension runs the upstream exporter in Chrome's `MAIN` world at `document_start` and a continuity bridge in an `ISOLATED` world. A local MV3 background service worker is used only for browser-local handoff tab control. No external endpoint or credential is included.
 
 After loading, a small **Continuity** control panel appears on ChatGPT pages. Use the visible ON/OFF control; the console API remains available for diagnostics but is no longer required for normal use. v1.5.9 also shows **Bridge: OK/FAIL** so cross-world handoff transport is observable before starting a rollover.

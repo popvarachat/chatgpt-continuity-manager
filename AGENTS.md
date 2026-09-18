@@ -15,6 +15,12 @@ This repository is a public fork used as the browser-side foundation for UAIOS_0
 - Do not force-push or bypass repository protections/checks.
 - Prefer squash merge after applicable checks and human approval.
 
+## Browser safety during development
+- Never navigate an existing `chatgpt.com` tab, the user's active Chrome tab, or the first Chrome window returned by process enumeration to `chrome://extensions`.
+- Never reload this unpacked extension by taking over the current address bar with UI automation.
+- Use `scripts/reload-extension-safe.ps1`; it must create a dedicated helper Chrome window, operate only on that new window, and close only that helper window.
+- If a dedicated helper window cannot be isolated, abort the reload instead of touching any pre-existing browser window.
+
 ## Safety and privacy
 - Never commit secrets, credentials, cookies, session tokens, ChatGPT auth headers, webhook secrets, or private company data.
 - This public fork must stay provider-agnostic and safe to publish.
