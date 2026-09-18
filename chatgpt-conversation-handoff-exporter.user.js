@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.8.0
+// @version      1.8.1
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9485,7 +9485,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.8.0';
+  const UAIOS_CONTINUITY_VERSION = '1.8.1';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9905,6 +9905,21 @@
         padding: 2px 4px 4px; opacity: .66; font-size: 11px; font-weight: 700;
       }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more-menu] button { width: 100%; text-align: left; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-recovery-submenu] { position: relative; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-recovery-submenu] > summary {
+        list-style: none; width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 8px;
+        cursor: pointer; user-select: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-recovery-submenu] > summary:hover { background: rgba(127,127,127,.10); }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-recovery-submenu] > summary::after { content: '›'; opacity: .55; font-size: 16px; line-height: 1; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-recovery-submenu] > summary::-webkit-details-marker { display: none; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-recovery-menu] {
+        position: absolute; right: calc(100% + 8px); bottom: 0; z-index: 3;
+        min-width: 178px; padding: 8px; border: 1px solid rgba(127,127,127,.28);
+        border-radius: 12px; background: var(--main-surface-primary, #fff);
+        box-shadow: 0 8px 24px rgba(0,0,0,.16); display: grid; gap: 6px;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-recovery-menu] button { width: 100%; text-align: left; }
       @media (max-width: 700px) { #${UAIOS_CONTINUITY_PANEL_ID} { left: 10px; right: 10px; bottom: 72px; } }
     `;
     (document.head || document.documentElement).appendChild(style);
@@ -10112,6 +10127,14 @@
     }
   }
 
+  function uaiosContinuityCloseMenus() {
+    const panel = document.getElementById(UAIOS_CONTINUITY_PANEL_ID);
+    const recovery = panel?.querySelector('[data-uaios-recovery-submenu]');
+    const more = panel?.querySelector('[data-uaios-more]');
+    if (recovery) recovery.open = false;
+    if (more) more.open = false;
+  }
+
   async function uaiosContinuityHandlePanelAction(action) {
     if (action === 'toggle') {
       uaiosWatchdogSetEnabled(!uaiosWatchdogIsEnabled());
@@ -10119,18 +10142,14 @@
       return;
     }
     if (action === 'import-recovery') {
-      const panel = document.getElementById(UAIOS_CONTINUITY_PANEL_ID);
-      const more = panel?.querySelector('[data-uaios-more]');
-      if (more) more.open = false;
+      uaiosContinuityCloseMenus();
       if (uaiosRecoveryImportInFlight) return;
       uaiosContinuityPromptRecoveryImport();
       return;
     }
     if (action === 'export-recovery') {
       if (uaiosExportInFlight) return;
-      const panel = document.getElementById(UAIOS_CONTINUITY_PANEL_ID);
-      const more = panel?.querySelector('[data-uaios-more]');
-      if (more) more.open = false;
+      uaiosContinuityCloseMenus();
       if (!uaiosContinuityLatestCheckpoint()) {
         uaiosContinuitySetPanelNote('Save a Checkpoint before exporting recovery history.', 'warn');
         return;
@@ -10152,9 +10171,7 @@
     }
     if (action === 'export-raw' || action === 'export-handoff') {
       if (uaiosExportInFlight) return;
-      const panel = document.getElementById(UAIOS_CONTINUITY_PANEL_ID);
-      const more = panel?.querySelector('[data-uaios-more]');
-      if (more) more.open = false;
+      uaiosContinuityCloseMenus();
       const conversationId = getConversationIdFromUrl();
       if (!conversationId) {
         uaiosContinuitySetPanelNote('Open a saved ChatGPT conversation before exporting.', 'warn');
@@ -10244,14 +10261,24 @@
             <div data-uaios-menu-title>Advanced / Export</div>
             <button type="button" data-uaios-action="export-raw" role="menuitem">Download Raw JSON</button>
             <button type="button" data-uaios-action="export-handoff" role="menuitem">Download Handoff JSON</button>
-            <div data-uaios-menu-title>Recovery</div>
-            <button type="button" data-uaios-action="export-recovery" role="menuitem">Download Recovery Snapshot</button>
-            <button type="button" data-uaios-action="import-recovery" role="menuitem">Import Recovery Snapshot…</button>
+            <details data-uaios-recovery-submenu>
+              <summary role="menuitem">Recovery…</summary>
+              <div data-uaios-recovery-menu role="menu" aria-label="Recovery">
+                <button type="button" data-uaios-action="export-recovery" role="menuitem">Backup snapshot</button>
+                <button type="button" data-uaios-action="import-recovery" role="menuitem">Restore snapshot…</button>
+              </div>
+            </details>
           </div>
         </details>
         <button type="button" data-uaios-action="resume" hidden>Resume Handoff</button>
         <span data-uaios-note aria-live="polite"></span>
       `;
+      const moreMenu = panel.querySelector('[data-uaios-more]');
+      moreMenu?.addEventListener('toggle', () => {
+        if (moreMenu.open) return;
+        const recoveryMenu = moreMenu.querySelector('[data-uaios-recovery-submenu]');
+        if (recoveryMenu) recoveryMenu.open = false;
+      });
       panel.addEventListener('click', (event) => {
         const button = event.target.closest?.('[data-uaios-action]');
         if (!button) return;
