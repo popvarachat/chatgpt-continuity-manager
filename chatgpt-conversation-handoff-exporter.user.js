@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.8.2
+// @version      1.8.3
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9602,7 +9602,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.8.2';
+  const UAIOS_CONTINUITY_VERSION = '1.8.3';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9611,9 +9611,15 @@
   const UAIOS_CONTINUITY_STYLE_ID = 'uaios-continuity-style';
   const UAIOS_CONTINUITY_PANEL_POSITION_KEY = 'uaios.continuity.panelPosition.v1';
   const UAIOS_AUTO_CHECKPOINT_MS = 10 * 60 * 1000;
+  const UAIOS_AUTO_HANDOFF_MESSAGE_THRESHOLD = 110;
+  const UAIOS_AUTO_HANDOFF_CHAR_THRESHOLD = 150000;
+  const UAIOS_AUTO_HANDOFF_QUEUE_KEY = 'uaios.continuity.autoHandoffQueue.v1';
+  const UAIOS_AUTO_HANDOFF_HANDLED_KEY = 'uaios.continuity.autoHandoffHandledConversation.v1';
+  const UAIOS_AUTO_HANDOFF_RETRY_MS = 60 * 1000;
   const UAIOS_PENDING_ROLLOVER_TTL_MS = 30 * 60 * 1000;
   const UAIOS_STAGED_HANDOFF_WAIT_MS = 4000;
   let uaiosAutoCheckpointTimer = null;
+  let uaiosAutoHandoffInFlight = false;
   let uaiosCheckpointInFlight = false;
   let uaiosExportInFlight = false;
   let uaiosRecoveryImportInFlight = false;
@@ -9628,6 +9634,73 @@
     else if (messages >= 140 || chars >= 220000) level = 'high';
     else if (messages >= 80 || chars >= 100000) level = 'elevated';
     return { level, messages, chars };
+  }
+
+  function uaiosContinuityAutoHandoffEligible(load = uaiosContinuityLoadAssessment()) {
+    return load.messages >= UAIOS_AUTO_HANDOFF_MESSAGE_THRESHOLD ||
+      load.chars >= UAIOS_AUTO_HANDOFF_CHAR_THRESHOLD ||
+      load.level === 'high' ||
+      load.level === 'critical';
+  }
+
+  function uaiosContinuityReadAutoHandoffQueue() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(UAIOS_AUTO_HANDOFF_QUEUE_KEY) || 'null');
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function uaiosContinuityWriteAutoHandoffQueue(record) {
+    try {
+      if (record) localStorage.setItem(UAIOS_AUTO_HANDOFF_QUEUE_KEY, JSON.stringify(record));
+      else localStorage.removeItem(UAIOS_AUTO_HANDOFF_QUEUE_KEY);
+    } catch (_) {}
+    return record || null;
+  }
+
+  function uaiosContinuityAutoHandoffHandled(conversationId = getConversationIdFromUrl()) {
+    if (!conversationId) return false;
+    try {
+      return localStorage.getItem(UAIOS_AUTO_HANDOFF_HANDLED_KEY) === conversationId;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function uaiosContinuityMarkAutoHandoffHandled(conversationId = getConversationIdFromUrl()) {
+    if (!conversationId) return false;
+    try {
+      localStorage.setItem(UAIOS_AUTO_HANDOFF_HANDLED_KEY, conversationId);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function uaiosContinuityQueueAutoHandoff(reason = 'threshold') {
+    const conversationId = getConversationIdFromUrl();
+    if (!conversationId || !isConversationPage()) return null;
+    const existing = uaiosContinuityReadAutoHandoffQueue();
+    if (existing?.source_conversation_id === conversationId) return existing;
+    const record = {
+      scope: uaiosContinuityScopeId(),
+      source_conversation_id: conversationId,
+      queued_at: new Date().toISOString(),
+      reason,
+      next_attempt_at: 0
+    };
+    uaiosContinuityWriteAutoHandoffQueue(record);
+    uaiosWatchdogRecordEvent('auto_handoff_queued', {
+      sourceConversationId: conversationId,
+      reason,
+      cooldown_until: uaiosRateLimitCooldownUntil()
+        ? new Date(uaiosRateLimitCooldownUntil()).toISOString()
+        : null
+    });
+    uaiosContinuityRenderPanel();
+    return record;
   }
 
   function uaiosContinuityBridgeMailbox(id) {
@@ -10227,10 +10300,30 @@
     loadEl.textContent = `Load: ${load.level} · ${load.messages} msgs · ${Math.round(load.chars / 1000)}k chars`;
     loadEl.dataset.uaiosLoad = load.level;
     panel.dataset.uaiosLoad = load.level;
-    handoff.textContent = ['high', 'critical'].includes(load.level) ? '⚠ New Chat Handoff' : 'New Chat Handoff';
+    const currentConversationId = getConversationIdFromUrl();
+    const autoHandoffQueue = uaiosContinuityReadAutoHandoffQueue();
+    const handoffQueued = Boolean(
+      currentConversationId &&
+      autoHandoffQueue?.source_conversation_id === currentConversationId
+    );
+    const coolingSeconds = Math.max(0, Math.ceil(rateLimitRemainingMs / 1000));
+    const coolingMinutes = Math.floor(coolingSeconds / 60);
+    const coolingRemainder = String(coolingSeconds % 60).padStart(2, '0');
+    if (uaiosAutoHandoffInFlight) {
+      handoff.textContent = 'Opening New Chat…';
+    } else if (rateLimitCooling && handoffQueued) {
+      handoff.textContent = `Handoff QUEUED · ${coolingMinutes}:${coolingRemainder}`;
+    } else if (rateLimitCooling) {
+      handoff.textContent = `Queue Handoff · ${coolingMinutes}:${coolingRemainder}`;
+    } else {
+      handoff.textContent = ['high', 'critical'].includes(load.level) ||
+        uaiosContinuityAutoHandoffEligible(load)
+        ? '⚠ New Chat Handoff'
+        : 'New Chat Handoff';
+    }
     const generationActive = uaiosContinuityGenerationInProgress();
     checkpoint.disabled = uaiosCheckpointInFlight || generationActive || rateLimitCooling || !isConversationPage();
-    handoff.disabled = uaiosCheckpointInFlight || generationActive || rateLimitCooling || !isConversationPage();
+    handoff.disabled = uaiosCheckpointInFlight || uaiosAutoHandoffInFlight || generationActive || !isConversationPage();
     if (exportRaw) exportRaw.disabled = uaiosExportInFlight || generationActive || rateLimitCooling || !isConversationPage();
     if (exportHandoff) exportHandoff.disabled = uaiosExportInFlight || generationActive || rateLimitCooling || !isConversationPage();
     if (exportRecovery) exportRecovery.disabled = uaiosExportInFlight || uaiosRecoveryImportInFlight || generationActive || !uaiosContinuityLatestCheckpoint();
@@ -10349,6 +10442,22 @@
       return;
     }
     if (action === 'handoff') {
+      if (uaiosRateLimitIsCooling()) {
+        const queued = uaiosContinuityQueueAutoHandoff('manual-during-cooling');
+        if (queued) {
+          const remainingSeconds = Math.max(0, Math.ceil(uaiosRateLimitRemainingMs() / 1000));
+          const minutes = Math.floor(remainingSeconds / 60);
+          const seconds = String(remainingSeconds % 60).padStart(2, '0');
+          uaiosContinuitySetPanelNote(
+            `Handoff queued. New Chat will open automatically after cooling (${minutes}:${seconds}).`,
+            'success'
+          );
+        } else {
+          uaiosContinuitySetPanelNote('Unable to queue Handoff on this page.', 'warn');
+        }
+        uaiosContinuityRenderPanel();
+        return;
+      }
       let preopenedTab = null;
       try {
         const stagedRecord = uaiosContinuityStageRollover();
@@ -10362,6 +10471,8 @@
         }
         uaiosContinuitySetPanelNote('Handoff staged locally; refreshing checkpoint…', 'info');
         await uaiosContinuityPrepareRollover(preopenedTab, stagedRecord);
+        uaiosContinuityMarkAutoHandoffHandled(stagedRecord.source_conversation_id);
+        uaiosContinuityWriteAutoHandoffQueue(null);
       } catch (error) {
         try { if (preopenedTab && !preopenedTab.closed) preopenedTab.close(); } catch (_) {}
         uaiosContinuitySetPanelNote(`Handoff failed: ${toErrorMessage(error)}`, 'error');
@@ -10436,6 +10547,88 @@
     return false;
   }
 
+  async function uaiosContinuityAutoHandoffTick() {
+    if (!uaiosWatchdogIsEnabled() || !isConversationPage()) return false;
+    const conversationId = getConversationIdFromUrl();
+    if (!conversationId) return false;
+
+    let queue = uaiosContinuityReadAutoHandoffQueue();
+    const queuedForCurrent = queue?.source_conversation_id === conversationId;
+    if (uaiosContinuityAutoHandoffHandled(conversationId)) {
+      if (queuedForCurrent) uaiosContinuityWriteAutoHandoffQueue(null);
+      return false;
+    }
+    if (uaiosContinuityGetPendingRollover()) return false;
+
+    const load = uaiosContinuityLoadAssessment();
+    if (!uaiosContinuityAutoHandoffEligible(load) && !queuedForCurrent) return false;
+    if (!queuedForCurrent) {
+      queue = uaiosContinuityQueueAutoHandoff('threshold');
+    }
+    if (!queue) return false;
+
+    if (uaiosRateLimitIsCooling()) {
+      uaiosContinuityRenderPanel();
+      return true;
+    }
+
+    const nextAttemptAt = Number(queue.next_attempt_at || 0);
+    if (Number.isFinite(nextAttemptAt) && nextAttemptAt > Date.now()) return false;
+    if (
+      document.visibilityState !== 'visible' ||
+      uaiosAutoHandoffInFlight ||
+      uaiosCheckpointInFlight ||
+      uaiosContinuityGenerationInProgress()
+    ) {
+      return false;
+    }
+
+    uaiosAutoHandoffInFlight = true;
+    uaiosContinuityWriteAutoHandoffQueue({
+      ...queue,
+      next_attempt_at: Date.now() + UAIOS_AUTO_HANDOFF_RETRY_MS
+    });
+    uaiosContinuityRenderPanel();
+    uaiosContinuitySetPanelNote('Preparing automatic New Chat Handoff…', 'info');
+    try {
+      const record = await uaiosContinuityPrepareRollover();
+      if (!record) throw new Error('handoff preparation did not return a rollover record');
+      uaiosContinuityMarkAutoHandoffHandled(conversationId);
+      uaiosContinuityWriteAutoHandoffQueue(null);
+      uaiosWatchdogRecordEvent('auto_handoff_opened', {
+        sourceConversationId: conversationId,
+        load_level: load.level,
+        messages: load.messages,
+        chars: load.chars
+      });
+      uaiosContinuitySetPanelNote(
+        'New Chat Handoff opened automatically. Review the bootstrap, then send.',
+        'success'
+      );
+      return true;
+    } catch (error) {
+      const currentQueue = uaiosContinuityReadAutoHandoffQueue();
+      if (currentQueue?.source_conversation_id === conversationId) {
+        uaiosContinuityWriteAutoHandoffQueue({
+          ...currentQueue,
+          next_attempt_at: Date.now() + UAIOS_AUTO_HANDOFF_RETRY_MS
+        });
+      }
+      uaiosWatchdogRecordEvent('auto_handoff_failed', {
+        sourceConversationId: conversationId,
+        message: toErrorMessage(error)
+      });
+      uaiosContinuitySetPanelNote(
+        'Auto Handoff retry queued; no message was sent.',
+        'warn'
+      );
+      return false;
+    } finally {
+      uaiosAutoHandoffInFlight = false;
+      uaiosContinuityRenderPanel();
+    }
+  }
+
   async function uaiosContinuityAutoCheckpointTick() {
     if (!uaiosWatchdogIsEnabled() || !isConversationPage()) return false;
     if (uaiosRateLimitIsCooling()) return false;
@@ -10464,6 +10657,7 @@
     const tick = () => {
       uaiosContinuityEnsurePanel();
       void uaiosContinuityApplyPendingRollover();
+      void uaiosContinuityAutoHandoffTick();
       void uaiosContinuityAutoCheckpointTick();
     };
     uaiosAutoCheckpointTimer = window.setInterval(tick, 3000);
