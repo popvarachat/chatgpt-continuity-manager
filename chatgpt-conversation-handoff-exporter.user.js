@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.8.3
+// @version      1.8.4
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9602,7 +9602,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.8.3';
+  const UAIOS_CONTINUITY_VERSION = '1.8.4';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -10053,22 +10053,22 @@
     style.id = UAIOS_CONTINUITY_STYLE_ID;
     style.textContent = `
       #${UAIOS_CONTINUITY_PANEL_ID} {
-        position: fixed; right: 18px; bottom: 78px; z-index: 2147483000;
-        display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-        max-width: min(760px, calc(100vw - 36px)); padding: 8px;
-        border: 1px solid rgba(127,127,127,.28); border-radius: 14px;
+        position: fixed; right: 14px; bottom: 72px; z-index: 2147483000;
+        display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+        width: fit-content; max-width: min(720px, calc(100vw - 28px)); padding: 5px 6px;
+        border: 1px solid rgba(127,127,127,.26); border-radius: 11px;
         background: color-mix(in srgb, var(--main-surface-primary, #fff) 94%, transparent);
-        box-shadow: 0 8px 30px rgba(0,0,0,.14); font: 12px/1.2 system-ui, sans-serif;
+        box-shadow: 0 6px 22px rgba(0,0,0,.12); font: 11px/1.15 system-ui, sans-serif;
       }
       #${UAIOS_CONTINUITY_PANEL_ID} button {
-        border: 1px solid rgba(127,127,127,.25); border-radius: 9px;
-        padding: 6px 9px; background: var(--main-surface-secondary, #f4f4f4);
+        border: 1px solid rgba(127,127,127,.24); border-radius: 7px;
+        padding: 4px 7px; background: var(--main-surface-secondary, #f4f4f4);
         color: inherit; cursor: pointer; white-space: nowrap;
       }
       #${UAIOS_CONTINUITY_PANEL_ID} button:disabled { opacity: .55; cursor: wait; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-drag-handle] {
         display: inline-flex; align-items: center; justify-content: center;
-        width: 22px; height: 28px; border-radius: 8px;
+        width: 18px; height: 22px; border-radius: 6px;
         cursor: grab; user-select: none; touch-action: none; opacity: .62;
       }
       #${UAIOS_CONTINUITY_PANEL_ID}[data-uaios-dragging="true"] [data-uaios-drag-handle] { cursor: grabbing; opacity: 1; }
@@ -10077,10 +10077,11 @@
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-load="high"],
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-load="critical"] { font-weight: 700; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-note] { flex-basis: 100%; opacity: .78; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-note]:empty { display: none; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] { position: relative; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] > summary {
-        list-style: none; border: 1px solid rgba(127,127,127,.25); border-radius: 9px;
-        padding: 6px 10px; background: var(--main-surface-secondary, #f4f4f4);
+        list-style: none; border: 1px solid rgba(127,127,127,.24); border-radius: 7px;
+        padding: 4px 8px; background: var(--main-surface-secondary, #f4f4f4);
         color: inherit; cursor: pointer; user-select: none; font-weight: 700;
       }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] > summary::-webkit-details-marker { display: none; }
@@ -10275,11 +10276,20 @@
     const exportRecovery = panel.querySelector('[data-uaios-action="export-recovery"]');
     const importRecovery = panel.querySelector('[data-uaios-action="import-recovery"]');
     toggle.textContent = enabled ? 'Continuity ON' : 'Continuity OFF';
+    toggle.title = enabled
+      ? 'Continuity automation is enabled.'
+      : 'Continuity automation is paused.';
     toggle.dataset.uaiosStatus = enabled ? 'on' : 'off';
-    bridgeEl.textContent = `Bridge: ${uaiosBridgeHealth === 'ok' ? 'OK' : uaiosBridgeHealth === 'fail' ? 'FAIL' : '…'}`;
+    bridgeEl.textContent = `Bridge ${uaiosBridgeHealth === 'ok' ? 'OK' : uaiosBridgeHealth === 'fail' ? 'FAIL' : '…'}`;
+    bridgeEl.title = 'Bridge is the local MAIN ↔ extension handoff channel. OK means cross-tab continuity transport is available.';
     bridgeEl.dataset.uaiosBridge = uaiosBridgeHealth;
     const stateSource = uaiosContinuityLatestCheckpoint()?.project_state?.state_source || '';
-    stateEl.textContent = 'State: ' + (stateSource.includes('manual') ? 'MANUAL+AUTO' : stateSource ? 'AUTO' : 'WAIT');
+    stateEl.textContent = 'State ' + (stateSource.includes('manual') ? 'M+A' : stateSource ? 'AUTO' : 'WAIT');
+    stateEl.title = stateSource.includes('manual')
+      ? 'Project State combines manual state with auto-derived continuity state.'
+      : stateSource
+        ? 'Project State is auto-derived from recent conversation evidence.'
+        : 'Project State is not ready yet.';
     stateEl.dataset.uaiosState = stateSource || 'wait';
     const rateLimitRemainingMs = uaiosRateLimitRemainingMs();
     const rateLimitCooling = rateLimitRemainingMs > 0;
@@ -10289,7 +10299,8 @@
         const minutes = Math.floor(totalSeconds / 60);
         const seconds = String(totalSeconds % 60).padStart(2, '0');
         rateLimitEl.hidden = false;
-        rateLimitEl.textContent = `Rate Limit: COOLING ${minutes}:${seconds}`;
+        rateLimitEl.textContent = `Cool ${minutes}:${seconds}`;
+        rateLimitEl.title = 'Local rate-limit cooling. Continuity waits before making request-generating actions.';
         rateLimitEl.dataset.uaiosRateLimit = 'cooling';
       } else {
         rateLimitEl.hidden = true;
@@ -10297,7 +10308,8 @@
         rateLimitEl.dataset.uaiosRateLimit = 'idle';
       }
     }
-    loadEl.textContent = `Load: ${load.level} · ${load.messages} msgs · ${Math.round(load.chars / 1000)}k chars`;
+    loadEl.textContent = `Load ${load.level} · ${load.messages}/${Math.round(load.chars / 1000)}k`;
+    loadEl.title = `Heuristic conversation load: ${load.messages} messages and ${load.chars.toLocaleString()} content characters. This is not a token meter.`;
     loadEl.dataset.uaiosLoad = load.level;
     panel.dataset.uaiosLoad = load.level;
     const currentConversationId = getConversationIdFromUrl();
@@ -10498,12 +10510,13 @@
         <span data-uaios-bridge="unknown">Bridge: …</span>
         <span data-uaios-state="wait">State: WAIT</span>
         <span data-uaios-rate-limit="idle" hidden></span>
-        <span data-uaios-load="normal">Load: unknown</span>
-        <button type="button" data-uaios-action="checkpoint">Checkpoint</button>
-        <button type="button" data-uaios-action="handoff">New Chat Handoff</button>
+        <span data-uaios-load="normal">Load unknown</span>
+        <button type="button" data-uaios-action="handoff" title="Open or queue a fresh chat in the same Project with a continuity bootstrap.">New Chat Handoff</button>
         <details data-uaios-more>
           <summary aria-label="More Continuity actions" title="More actions">⋯</summary>
           <div data-uaios-more-menu role="menu">
+            <div data-uaios-menu-title>Actions</div>
+            <button type="button" data-uaios-action="checkpoint" role="menuitem">Save Checkpoint</button>
             <div data-uaios-menu-title>Advanced / Export</div>
             <button type="button" data-uaios-action="export-raw" role="menuitem">Download Raw JSON</button>
             <button type="button" data-uaios-action="export-handoff" role="menuitem">Download Handoff JSON</button>

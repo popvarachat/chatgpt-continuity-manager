@@ -440,6 +440,8 @@ v1.8.2 adds guarded rate-limit handling while Continuity is ON. It recognizes on
 
 v1.8.3 makes long-chat rollover proactive. A conversation becomes eligible for automatic New Chat Handoff at **110 messages or 150k content characters** (high/critical load remains eligible). During rate-limit cooling, the Handoff button stays usable and queues the rollover locally instead of going dead; the panel shows **Handoff QUEUED · m:ss**. As soon as cooling ends and the visible chat is idle, Continuity refreshes the checkpoint, opens a fresh chat in the same Project, and hydrates the bootstrap. It still **never auto-sends** the message; the user reviews and presses Send.
 
+v1.8.4 compacts the floating Continuity bar to reduce screen obstruction: smaller typography, padding, drag handle and menu button; shorter status labels with explanatory hover tooltips; and **Save Checkpoint** moves under **⋯ → Actions**. Empty status notes no longer reserve a second row, while Handoff remains visible as the primary action.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.

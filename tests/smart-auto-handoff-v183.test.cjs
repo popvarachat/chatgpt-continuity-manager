@@ -6,9 +6,9 @@ const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'chatgpt-conversation-handoff-exporter.user.js'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 
-assert.strictEqual(manifest.version, '1.8.3');
-assert.match(source, /@version\s+1\.8\.3/);
-assert.match(source, /UAIOS_CONTINUITY_VERSION = '1\.8\.3'/);
+assert.strictEqual(manifest.version, '1.8.4');
+assert.match(source, /@version\s+1\.8\.4/);
+assert.match(source, /UAIOS_CONTINUITY_VERSION = '1\.8\.4'/);
 assert.match(source, /UAIOS_AUTO_HANDOFF_MESSAGE_THRESHOLD = 110/);
 assert.match(source, /UAIOS_AUTO_HANDOFF_CHAR_THRESHOLD = 150000/);
 assert.match(source, /function uaiosContinuityAutoHandoffEligible\(/);

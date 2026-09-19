@@ -14,7 +14,7 @@ assert.match(source, /UAIOS_RATE_LIMIT_DISMISS_LABELS\.includes\(uaiosRateLimitB
 assert.match(source, /UAIOS_RATE_LIMIT_BLOCKED_MARKERS/);
 assert.match(source, /data-uaios-rate-limit-handled/);
 assert.match(source, /rate_limit_auto_dismiss/);
-assert.match(source, /Rate Limit: COOLING/);
+assert.match(source, /rateLimitEl\.textContent = `Cool /);
 assert.match(source, /if \(uaiosRateLimitScanAndDismiss\(\)\) return true;/);
 assert.match(source, /if \(uaiosRateLimitIsCooling\(\)\) return false;/);
 assert.match(source, /checkpoint\.disabled = .*rateLimitCooling/);
