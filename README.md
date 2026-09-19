@@ -436,6 +436,14 @@ v1.8.0 completes the manual recovery loop with **⋯ → Recovery → Import Rec
 
 v1.8.1 reduces Recovery UI clutter: the primary `⋯` menu now shows a single **Recovery…** entry, which opens a compact secondary menu with **Backup snapshot** and **Restore snapshot…**. Recovery behavior and safeguards are unchanged.
 
+v1.8.2 adds guarded rate-limit handling while Continuity is ON. It recognizes only known rate-limit dialog text, auto-dismisses only exact safe acknowledgement labels such as **Got it / Understood / เข้าใจแล้ว**, and refuses dialogs containing delete, payment, permission, or approval cues. After detection it pauses automatic Retry/Continue plus request-generating Continuity actions, shows **Rate Limit: COOLING m:ss**, and applies escalating local backoff of 3 → 6 → 10 minutes for repeated detections within 30 minutes. Recovery backup/restore remains local and available.
+
+v1.8.3 makes long-chat rollover proactive. A conversation becomes eligible for automatic New Chat Handoff at **110 messages or 150k content characters** (high/critical load remains eligible). During rate-limit cooling, the Handoff button stays usable and queues the rollover locally instead of going dead; the panel shows **Handoff QUEUED · m:ss**. As soon as cooling ends and the visible chat is idle, Continuity refreshes the checkpoint, opens a fresh chat in the same Project, and hydrates the bootstrap. It still **never auto-sends** the message; the user reviews and presses Send.
+
+v1.8.4 compacts the floating Continuity bar to reduce screen obstruction: smaller typography, padding, drag handle and menu button; shorter status labels with explanatory hover tooltips; and **Save Checkpoint** moves under **⋯ → Actions**. Empty status notes no longer reserve a second row, while Handoff remains visible as the primary action.
+
+v1.8.5 adds a restrained semantic color system while keeping the bar theme-aware and minimal: green for Continuity ON, teal for Bridge OK, indigo for Project State, amber for cooling/elevated load, orange/red only for higher load risk, and a subdued blue Handoff action. Statuses render as soft pills on a lightly blurred surface rather than bright solid blocks.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.

@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.8.1
+// @version      1.8.5
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8564,6 +8564,10 @@
   const UAIOS_WATCHDOG_WINDOW_MS = 15 * 60 * 1000;
   const UAIOS_WATCHDOG_COOLDOWN_MS = 15 * 1000;
   const UAIOS_WATCHDOG_SCAN_MS = 2500;
+  const UAIOS_RATE_LIMIT_UNTIL_KEY = 'uaios.continuity.rateLimitUntil.v1';
+  const UAIOS_RATE_LIMIT_BASE_BACKOFF_MS = 3 * 60 * 1000;
+  const UAIOS_RATE_LIMIT_MAX_BACKOFF_MS = 10 * 60 * 1000;
+  const UAIOS_RATE_LIMIT_WINDOW_MS = 30 * 60 * 1000;
   const UAIOS_WATCHDOG_RETRY_LABELS = [
     'retry', 'try again',
     '\u0e17\u0e33\u0e0b\u0e49\u0e33',
@@ -8581,6 +8585,23 @@
     '\u0e2b\u0e21\u0e14\u0e40\u0e27\u0e25\u0e32',
     '\u0e2b\u0e21\u0e14\u0e40\u0e27\u0e25\u0e32\u0e08\u0e31\u0e14\u0e2a\u0e48\u0e07\u0e02\u0e49\u0e2d\u0e04\u0e27\u0e32\u0e21',
     '\u0e40\u0e01\u0e34\u0e14\u0e02\u0e49\u0e2d\u0e1c\u0e34\u0e14\u0e1e\u0e25\u0e32\u0e14'
+  ];
+  const UAIOS_RATE_LIMIT_MARKERS = [
+    'too many requests',
+    'requests too quickly',
+    'temporarily limited access to your conversation',
+    'please wait a few minutes before trying again',
+    '\u0e21\u0e35\u0e04\u0e33\u0e02\u0e2d\u0e08\u0e33\u0e19\u0e27\u0e19\u0e21\u0e32\u0e01\u0e40\u0e01\u0e34\u0e19\u0e44\u0e1b',
+    '\u0e04\u0e38\u0e13\u0e01\u0e33\u0e25\u0e31\u0e07\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e04\u0e33\u0e02\u0e2d\u0e40\u0e23\u0e47\u0e27\u0e40\u0e01\u0e34\u0e19\u0e44\u0e1b',
+    '\u0e42\u0e1b\u0e23\u0e14\u0e23\u0e2d\u0e2a\u0e2d\u0e07\u0e2a\u0e32\u0e21\u0e19\u0e32\u0e17\u0e35\u0e01\u0e48\u0e2d\u0e19\u0e08\u0e30\u0e25\u0e2d\u0e07\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07'
+  ];
+  const UAIOS_RATE_LIMIT_DISMISS_LABELS = [
+    'got it', 'understood',
+    '\u0e40\u0e02\u0e49\u0e32\u0e43\u0e08\u0e41\u0e25\u0e49\u0e27'
+  ];
+  const UAIOS_RATE_LIMIT_BLOCKED_MARKERS = [
+    'delete', 'purchase', 'payment', 'permission', 'approve', 'allow access',
+    '\u0e25\u0e1a', '\u0e0a\u0e33\u0e23\u0e30', '\u0e2d\u0e19\u0e38\u0e0d\u0e32\u0e15', '\u0e2d\u0e19\u0e38\u0e21\u0e31\u0e15\u0e34'
   ];
   let uaiosWatchdogObserver = null;
   let uaiosWatchdogTimer = null;
@@ -8664,6 +8685,98 @@
     }
   }
 
+  function uaiosRateLimitCooldownUntil() {
+    try {
+      const value = Number(localStorage.getItem(UAIOS_RATE_LIMIT_UNTIL_KEY) || 0);
+      return Number.isFinite(value) ? value : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  function uaiosRateLimitRemainingMs() {
+    return Math.max(0, uaiosRateLimitCooldownUntil() - Date.now());
+  }
+
+  function uaiosRateLimitIsCooling() {
+    return uaiosRateLimitRemainingMs() > 0;
+  }
+
+  function uaiosRateLimitBackoffMs() {
+    const cutoff = Date.now() - UAIOS_RATE_LIMIT_WINDOW_MS;
+    const recentDetections = uaiosWatchdogReadEvents().filter((event) => {
+      const eventTime = Date.parse(event.at || '');
+      return event.type === 'rate_limit_detected' &&
+        Number.isFinite(eventTime) && eventTime >= cutoff;
+    }).length;
+    const multiplier = 2 ** Math.min(recentDetections, 2);
+    return Math.min(UAIOS_RATE_LIMIT_BASE_BACKOFF_MS * multiplier, UAIOS_RATE_LIMIT_MAX_BACKOFF_MS);
+  }
+
+  function uaiosRateLimitStartCooling(reason = '') {
+    const duration = uaiosRateLimitBackoffMs();
+    const until = Math.max(uaiosRateLimitCooldownUntil(), Date.now() + duration);
+    try {
+      localStorage.setItem(UAIOS_RATE_LIMIT_UNTIL_KEY, String(until));
+    } catch (_) {}
+    uaiosWatchdogRecordEvent('rate_limit_detected', {
+      cooldown_ms: duration,
+      cooldown_until: new Date(until).toISOString(),
+      reason: String(reason || '').slice(0, 240)
+    });
+    uaiosContinuityRenderPanel();
+    return until;
+  }
+
+  function uaiosRateLimitButtonLabel(element) {
+    const raw = element?.innerText || element?.textContent || element?.getAttribute?.('aria-label') || element?.getAttribute?.('title') || '';
+    return String(raw).toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  function uaiosRateLimitFindModal() {
+    const dialogs = [...new Set(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'))];
+    for (const dialog of dialogs) {
+      if (!uaiosWatchdogIsClickable(dialog)) continue;
+      const dialogText = uaiosWatchdogNormalizeText(dialog);
+      if (!uaiosWatchdogMatchesAny(dialogText, UAIOS_RATE_LIMIT_MARKERS)) continue;
+      if (uaiosWatchdogMatchesAny(dialogText, UAIOS_RATE_LIMIT_BLOCKED_MARKERS)) continue;
+      const button = Array.from(dialog.querySelectorAll('button, [role="button"]')).find((candidate) => {
+        if (!uaiosWatchdogIsClickable(candidate)) return false;
+        return UAIOS_RATE_LIMIT_DISMISS_LABELS.includes(uaiosRateLimitButtonLabel(candidate));
+      });
+      if (button) return { dialog, button, dialogText };
+    }
+    return null;
+  }
+
+  function uaiosRateLimitScanAndDismiss() {
+    const match = uaiosRateLimitFindModal();
+    if (!match) return false;
+    if (match.dialog.getAttribute('data-uaios-rate-limit-handled') === 'true') return true;
+    match.dialog.setAttribute('data-uaios-rate-limit-handled', 'true');
+    uaiosRateLimitStartCooling(match.dialogText);
+    if (uaiosWatchdogPending) return true;
+    uaiosWatchdogPending = true;
+    window.setTimeout(() => {
+      try {
+        if (!uaiosWatchdogIsEnabled() || !match.dialog.isConnected) return;
+        const dialogText = uaiosWatchdogNormalizeText(match.dialog);
+        const label = uaiosRateLimitButtonLabel(match.button);
+        if (!uaiosWatchdogMatchesAny(dialogText, UAIOS_RATE_LIMIT_MARKERS)) return;
+        if (uaiosWatchdogMatchesAny(dialogText, UAIOS_RATE_LIMIT_BLOCKED_MARKERS)) return;
+        if (!UAIOS_RATE_LIMIT_DISMISS_LABELS.includes(label)) return;
+        if (!uaiosWatchdogIsClickable(match.button)) return;
+        match.button.click();
+        uaiosWatchdogLastActionAt = Date.now();
+        uaiosWatchdogRecordEvent('rate_limit_auto_dismiss', { label, cooldown_until: new Date(uaiosRateLimitCooldownUntil()).toISOString() });
+      } finally {
+        uaiosWatchdogPending = false;
+        uaiosContinuityRenderPanel();
+      }
+    }, 450);
+    return true;
+  }
+
   function uaiosWatchdogBudgetAvailable(action) {
     const now = Date.now();
     const cutoff = now - UAIOS_WATCHDOG_WINDOW_MS;
@@ -8726,6 +8839,8 @@
   function uaiosWatchdogScanNow() {
     if (!uaiosWatchdogIsEnabled() || uaiosWatchdogPending) return false;
     if (!isConversationPage()) return false;
+    if (uaiosRateLimitScanAndDismiss()) return true;
+    if (uaiosRateLimitIsCooling()) return false;
     const retry = uaiosWatchdogFindCandidate('retry');
     if (retry) return uaiosWatchdogQueueClick(retry, 'retry');
     const continuation = uaiosWatchdogFindCandidate('continue');
@@ -8737,6 +8852,8 @@
       enabled: uaiosWatchdogIsEnabled(),
       scope: uaiosWatchdogScopeKey(),
       pending: uaiosWatchdogPending,
+      rateLimitCooling: uaiosRateLimitIsCooling(),
+      rateLimitRemainingMs: uaiosRateLimitRemainingMs(),
       recentEvents: uaiosWatchdogReadEvents().slice(-10)
     };
   }
@@ -9485,7 +9602,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.8.1';
+  const UAIOS_CONTINUITY_VERSION = '1.8.5';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -9494,9 +9611,15 @@
   const UAIOS_CONTINUITY_STYLE_ID = 'uaios-continuity-style';
   const UAIOS_CONTINUITY_PANEL_POSITION_KEY = 'uaios.continuity.panelPosition.v1';
   const UAIOS_AUTO_CHECKPOINT_MS = 10 * 60 * 1000;
+  const UAIOS_AUTO_HANDOFF_MESSAGE_THRESHOLD = 110;
+  const UAIOS_AUTO_HANDOFF_CHAR_THRESHOLD = 150000;
+  const UAIOS_AUTO_HANDOFF_QUEUE_KEY = 'uaios.continuity.autoHandoffQueue.v1';
+  const UAIOS_AUTO_HANDOFF_HANDLED_KEY = 'uaios.continuity.autoHandoffHandledConversation.v1';
+  const UAIOS_AUTO_HANDOFF_RETRY_MS = 60 * 1000;
   const UAIOS_PENDING_ROLLOVER_TTL_MS = 30 * 60 * 1000;
   const UAIOS_STAGED_HANDOFF_WAIT_MS = 4000;
   let uaiosAutoCheckpointTimer = null;
+  let uaiosAutoHandoffInFlight = false;
   let uaiosCheckpointInFlight = false;
   let uaiosExportInFlight = false;
   let uaiosRecoveryImportInFlight = false;
@@ -9511,6 +9634,73 @@
     else if (messages >= 140 || chars >= 220000) level = 'high';
     else if (messages >= 80 || chars >= 100000) level = 'elevated';
     return { level, messages, chars };
+  }
+
+  function uaiosContinuityAutoHandoffEligible(load = uaiosContinuityLoadAssessment()) {
+    return load.messages >= UAIOS_AUTO_HANDOFF_MESSAGE_THRESHOLD ||
+      load.chars >= UAIOS_AUTO_HANDOFF_CHAR_THRESHOLD ||
+      load.level === 'high' ||
+      load.level === 'critical';
+  }
+
+  function uaiosContinuityReadAutoHandoffQueue() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(UAIOS_AUTO_HANDOFF_QUEUE_KEY) || 'null');
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function uaiosContinuityWriteAutoHandoffQueue(record) {
+    try {
+      if (record) localStorage.setItem(UAIOS_AUTO_HANDOFF_QUEUE_KEY, JSON.stringify(record));
+      else localStorage.removeItem(UAIOS_AUTO_HANDOFF_QUEUE_KEY);
+    } catch (_) {}
+    return record || null;
+  }
+
+  function uaiosContinuityAutoHandoffHandled(conversationId = getConversationIdFromUrl()) {
+    if (!conversationId) return false;
+    try {
+      return localStorage.getItem(UAIOS_AUTO_HANDOFF_HANDLED_KEY) === conversationId;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function uaiosContinuityMarkAutoHandoffHandled(conversationId = getConversationIdFromUrl()) {
+    if (!conversationId) return false;
+    try {
+      localStorage.setItem(UAIOS_AUTO_HANDOFF_HANDLED_KEY, conversationId);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function uaiosContinuityQueueAutoHandoff(reason = 'threshold') {
+    const conversationId = getConversationIdFromUrl();
+    if (!conversationId || !isConversationPage()) return null;
+    const existing = uaiosContinuityReadAutoHandoffQueue();
+    if (existing?.source_conversation_id === conversationId) return existing;
+    const record = {
+      scope: uaiosContinuityScopeId(),
+      source_conversation_id: conversationId,
+      queued_at: new Date().toISOString(),
+      reason,
+      next_attempt_at: 0
+    };
+    uaiosContinuityWriteAutoHandoffQueue(record);
+    uaiosWatchdogRecordEvent('auto_handoff_queued', {
+      sourceConversationId: conversationId,
+      reason,
+      cooldown_until: uaiosRateLimitCooldownUntil()
+        ? new Date(uaiosRateLimitCooldownUntil()).toISOString()
+        : null
+    });
+    uaiosContinuityRenderPanel();
+    return record;
   }
 
   function uaiosContinuityBridgeMailbox(id) {
@@ -9863,22 +10053,88 @@
     style.id = UAIOS_CONTINUITY_STYLE_ID;
     style.textContent = `
       #${UAIOS_CONTINUITY_PANEL_ID} {
-        position: fixed; right: 18px; bottom: 78px; z-index: 2147483000;
-        display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-        max-width: min(760px, calc(100vw - 36px)); padding: 8px;
-        border: 1px solid rgba(127,127,127,.28); border-radius: 14px;
-        background: color-mix(in srgb, var(--main-surface-primary, #fff) 94%, transparent);
-        box-shadow: 0 8px 30px rgba(0,0,0,.14); font: 12px/1.2 system-ui, sans-serif;
+        position: fixed; right: 14px; bottom: 72px; z-index: 2147483000;
+        display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+        width: fit-content; max-width: min(720px, calc(100vw - 28px)); padding: 5px 6px;
+        border: 1px solid rgba(127,127,127,.22); border-radius: 11px;
+        background: color-mix(in srgb, var(--main-surface-primary, #fff) 92%, transparent);
+        box-shadow: 0 8px 26px rgba(0,0,0,.12); font: 11px/1.15 system-ui, sans-serif;
+        backdrop-filter: blur(12px) saturate(118%);
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-version],
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-bridge],
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-state],
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-rate-limit],
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-load] {
+        padding: 3px 6px; border: 1px solid rgba(127,127,127,.16); border-radius: 999px;
+        background: color-mix(in srgb, var(--main-surface-secondary, #f4f4f4) 76%, transparent);
+        font-weight: 600; letter-spacing: .005em; white-space: nowrap;
       }
       #${UAIOS_CONTINUITY_PANEL_ID} button {
-        border: 1px solid rgba(127,127,127,.25); border-radius: 9px;
-        padding: 6px 9px; background: var(--main-surface-secondary, #f4f4f4);
-        color: inherit; cursor: pointer; white-space: nowrap;
+        border: 1px solid rgba(127,127,127,.22); border-radius: 7px;
+        padding: 4px 7px; background: color-mix(in srgb, var(--main-surface-secondary, #f4f4f4) 90%, transparent);
+        color: inherit; cursor: pointer; white-space: nowrap; transition: background .16s ease, border-color .16s ease, transform .16s ease;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} button:hover:not(:disabled) {
+        background: color-mix(in srgb, #2563eb 8%, var(--main-surface-secondary, #f4f4f4));
+        border-color: color-mix(in srgb, #2563eb 34%, rgba(127,127,127,.22));
+        transform: translateY(-1px);
       }
       #${UAIOS_CONTINUITY_PANEL_ID} button:disabled { opacity: .55; cursor: wait; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-action="toggle"][data-uaios-status="on"] {
+        color: color-mix(in srgb, #059669 82%, currentColor);
+        background: color-mix(in srgb, #10b981 10%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #10b981 34%, rgba(127,127,127,.18)); font-weight: 750;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-action="toggle"][data-uaios-status="off"] {
+        color: color-mix(in srgb, #64748b 78%, currentColor);
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-version] {
+        color: color-mix(in srgb, #64748b 74%, currentColor);
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-bridge="ok"] {
+        color: color-mix(in srgb, #0f766e 82%, currentColor);
+        background: color-mix(in srgb, #14b8a6 9%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #14b8a6 28%, rgba(127,127,127,.16));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-bridge="fail"] {
+        color: color-mix(in srgb, #b91c1c 82%, currentColor);
+        background: color-mix(in srgb, #ef4444 9%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #ef4444 30%, rgba(127,127,127,.16));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-state]:not([data-uaios-state="wait"]) {
+        color: color-mix(in srgb, #4f46e5 78%, currentColor);
+        background: color-mix(in srgb, #6366f1 8%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #6366f1 24%, rgba(127,127,127,.16));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-rate-limit="cooling"] {
+        color: color-mix(in srgb, #b45309 86%, currentColor);
+        background: color-mix(in srgb, #f59e0b 11%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #f59e0b 32%, rgba(127,127,127,.16));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-load="normal"] {
+        color: color-mix(in srgb, #475569 78%, currentColor);
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-load="elevated"] {
+        color: color-mix(in srgb, #a16207 84%, currentColor);
+        background: color-mix(in srgb, #eab308 9%, var(--main-surface-primary, #fff));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-load="high"] {
+        color: color-mix(in srgb, #c2410c 86%, currentColor);
+        background: color-mix(in srgb, #f97316 10%, var(--main-surface-primary, #fff));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-load="critical"] {
+        color: color-mix(in srgb, #b91c1c 86%, currentColor);
+        background: color-mix(in srgb, #ef4444 10%, var(--main-surface-primary, #fff));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-action="handoff"] {
+        color: color-mix(in srgb, #1d4ed8 82%, currentColor);
+        background: color-mix(in srgb, #3b82f6 9%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #3b82f6 30%, rgba(127,127,127,.18)); font-weight: 700;
+      }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-drag-handle] {
         display: inline-flex; align-items: center; justify-content: center;
-        width: 22px; height: 28px; border-radius: 8px;
+        width: 18px; height: 22px; border-radius: 6px;
         cursor: grab; user-select: none; touch-action: none; opacity: .62;
       }
       #${UAIOS_CONTINUITY_PANEL_ID}[data-uaios-dragging="true"] [data-uaios-drag-handle] { cursor: grabbing; opacity: 1; }
@@ -9887,11 +10143,15 @@
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-load="high"],
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-load="critical"] { font-weight: 700; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-note] { flex-basis: 100%; opacity: .78; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-note]:empty { display: none; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] { position: relative; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] > summary {
-        list-style: none; border: 1px solid rgba(127,127,127,.25); border-radius: 9px;
-        padding: 6px 10px; background: var(--main-surface-secondary, #f4f4f4);
-        color: inherit; cursor: pointer; user-select: none; font-weight: 700;
+        list-style: none; border: 1px solid rgba(127,127,127,.20); border-radius: 7px;
+        padding: 4px 8px; background: color-mix(in srgb, var(--main-surface-secondary, #f4f4f4) 88%, transparent);
+        color: color-mix(in srgb, #64748b 70%, currentColor); cursor: pointer; user-select: none; font-weight: 700;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] > summary:hover {
+        background: color-mix(in srgb, #2563eb 7%, var(--main-surface-secondary, #f4f4f4));
       }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] > summary::-webkit-details-marker { display: none; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more-menu] {
@@ -10076,6 +10336,7 @@
     const loadEl = panel.querySelector('[data-uaios-load]');
     const bridgeEl = panel.querySelector('[data-uaios-bridge]');
     const stateEl = panel.querySelector('[data-uaios-state]');
+    const rateLimitEl = panel.querySelector('[data-uaios-rate-limit]');
     const checkpoint = panel.querySelector('[data-uaios-action="checkpoint"]');
     const handoff = panel.querySelector('[data-uaios-action="handoff"]');
     const resume = panel.querySelector('[data-uaios-action="resume"]');
@@ -10084,21 +10345,68 @@
     const exportRecovery = panel.querySelector('[data-uaios-action="export-recovery"]');
     const importRecovery = panel.querySelector('[data-uaios-action="import-recovery"]');
     toggle.textContent = enabled ? 'Continuity ON' : 'Continuity OFF';
+    toggle.title = enabled
+      ? 'Continuity automation is enabled.'
+      : 'Continuity automation is paused.';
     toggle.dataset.uaiosStatus = enabled ? 'on' : 'off';
-    bridgeEl.textContent = `Bridge: ${uaiosBridgeHealth === 'ok' ? 'OK' : uaiosBridgeHealth === 'fail' ? 'FAIL' : '…'}`;
+    bridgeEl.textContent = `Bridge ${uaiosBridgeHealth === 'ok' ? 'OK' : uaiosBridgeHealth === 'fail' ? 'FAIL' : '…'}`;
+    bridgeEl.title = 'Bridge is the local MAIN ↔ extension handoff channel. OK means cross-tab continuity transport is available.';
     bridgeEl.dataset.uaiosBridge = uaiosBridgeHealth;
     const stateSource = uaiosContinuityLatestCheckpoint()?.project_state?.state_source || '';
-    stateEl.textContent = 'State: ' + (stateSource.includes('manual') ? 'MANUAL+AUTO' : stateSource ? 'AUTO' : 'WAIT');
+    stateEl.textContent = 'State ' + (stateSource.includes('manual') ? 'M+A' : stateSource ? 'AUTO' : 'WAIT');
+    stateEl.title = stateSource.includes('manual')
+      ? 'Project State combines manual state with auto-derived continuity state.'
+      : stateSource
+        ? 'Project State is auto-derived from recent conversation evidence.'
+        : 'Project State is not ready yet.';
     stateEl.dataset.uaiosState = stateSource || 'wait';
-    loadEl.textContent = `Load: ${load.level} · ${load.messages} msgs · ${Math.round(load.chars / 1000)}k chars`;
+    const rateLimitRemainingMs = uaiosRateLimitRemainingMs();
+    const rateLimitCooling = rateLimitRemainingMs > 0;
+    if (rateLimitEl) {
+      if (rateLimitCooling) {
+        const totalSeconds = Math.max(0, Math.ceil(rateLimitRemainingMs / 1000));
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = String(totalSeconds % 60).padStart(2, '0');
+        rateLimitEl.hidden = false;
+        rateLimitEl.textContent = `Cool ${minutes}:${seconds}`;
+        rateLimitEl.title = 'Local rate-limit cooling. Continuity waits before making request-generating actions.';
+        rateLimitEl.dataset.uaiosRateLimit = 'cooling';
+      } else {
+        rateLimitEl.hidden = true;
+        rateLimitEl.textContent = '';
+        rateLimitEl.dataset.uaiosRateLimit = 'idle';
+      }
+    }
+    loadEl.textContent = `Load ${load.level} · ${load.messages}/${Math.round(load.chars / 1000)}k`;
+    loadEl.title = `Heuristic conversation load: ${load.messages} messages and ${load.chars.toLocaleString()} content characters. This is not a token meter.`;
     loadEl.dataset.uaiosLoad = load.level;
     panel.dataset.uaiosLoad = load.level;
-    handoff.textContent = ['high', 'critical'].includes(load.level) ? '⚠ New Chat Handoff' : 'New Chat Handoff';
+    const currentConversationId = getConversationIdFromUrl();
+    const autoHandoffQueue = uaiosContinuityReadAutoHandoffQueue();
+    const handoffQueued = Boolean(
+      currentConversationId &&
+      autoHandoffQueue?.source_conversation_id === currentConversationId
+    );
+    const coolingSeconds = Math.max(0, Math.ceil(rateLimitRemainingMs / 1000));
+    const coolingMinutes = Math.floor(coolingSeconds / 60);
+    const coolingRemainder = String(coolingSeconds % 60).padStart(2, '0');
+    if (uaiosAutoHandoffInFlight) {
+      handoff.textContent = 'Opening New Chat…';
+    } else if (rateLimitCooling && handoffQueued) {
+      handoff.textContent = `Handoff QUEUED · ${coolingMinutes}:${coolingRemainder}`;
+    } else if (rateLimitCooling) {
+      handoff.textContent = `Queue Handoff · ${coolingMinutes}:${coolingRemainder}`;
+    } else {
+      handoff.textContent = ['high', 'critical'].includes(load.level) ||
+        uaiosContinuityAutoHandoffEligible(load)
+        ? '⚠ New Chat Handoff'
+        : 'New Chat Handoff';
+    }
     const generationActive = uaiosContinuityGenerationInProgress();
-    checkpoint.disabled = uaiosCheckpointInFlight || generationActive || !isConversationPage();
-    handoff.disabled = uaiosCheckpointInFlight || generationActive || !isConversationPage();
-    if (exportRaw) exportRaw.disabled = uaiosExportInFlight || generationActive || !isConversationPage();
-    if (exportHandoff) exportHandoff.disabled = uaiosExportInFlight || generationActive || !isConversationPage();
+    checkpoint.disabled = uaiosCheckpointInFlight || generationActive || rateLimitCooling || !isConversationPage();
+    handoff.disabled = uaiosCheckpointInFlight || uaiosAutoHandoffInFlight || generationActive || !isConversationPage();
+    if (exportRaw) exportRaw.disabled = uaiosExportInFlight || generationActive || rateLimitCooling || !isConversationPage();
+    if (exportHandoff) exportHandoff.disabled = uaiosExportInFlight || generationActive || rateLimitCooling || !isConversationPage();
     if (exportRecovery) exportRecovery.disabled = uaiosExportInFlight || uaiosRecoveryImportInFlight || generationActive || !uaiosContinuityLatestCheckpoint();
     if (importRecovery) importRecovery.disabled = uaiosExportInFlight || uaiosRecoveryImportInFlight;
     resume.hidden = !pending || isConversationPage();
@@ -10215,6 +10523,22 @@
       return;
     }
     if (action === 'handoff') {
+      if (uaiosRateLimitIsCooling()) {
+        const queued = uaiosContinuityQueueAutoHandoff('manual-during-cooling');
+        if (queued) {
+          const remainingSeconds = Math.max(0, Math.ceil(uaiosRateLimitRemainingMs() / 1000));
+          const minutes = Math.floor(remainingSeconds / 60);
+          const seconds = String(remainingSeconds % 60).padStart(2, '0');
+          uaiosContinuitySetPanelNote(
+            `Handoff queued. New Chat will open automatically after cooling (${minutes}:${seconds}).`,
+            'success'
+          );
+        } else {
+          uaiosContinuitySetPanelNote('Unable to queue Handoff on this page.', 'warn');
+        }
+        uaiosContinuityRenderPanel();
+        return;
+      }
       let preopenedTab = null;
       try {
         const stagedRecord = uaiosContinuityStageRollover();
@@ -10228,6 +10552,8 @@
         }
         uaiosContinuitySetPanelNote('Handoff staged locally; refreshing checkpoint…', 'info');
         await uaiosContinuityPrepareRollover(preopenedTab, stagedRecord);
+        uaiosContinuityMarkAutoHandoffHandled(stagedRecord.source_conversation_id);
+        uaiosContinuityWriteAutoHandoffQueue(null);
       } catch (error) {
         try { if (preopenedTab && !preopenedTab.closed) preopenedTab.close(); } catch (_) {}
         uaiosContinuitySetPanelNote(`Handoff failed: ${toErrorMessage(error)}`, 'error');
@@ -10252,12 +10578,14 @@
         <span data-uaios-version>v${UAIOS_CONTINUITY_VERSION}</span>
         <span data-uaios-bridge="unknown">Bridge: …</span>
         <span data-uaios-state="wait">State: WAIT</span>
-        <span data-uaios-load="normal">Load: unknown</span>
-        <button type="button" data-uaios-action="checkpoint">Checkpoint</button>
-        <button type="button" data-uaios-action="handoff">New Chat Handoff</button>
+        <span data-uaios-rate-limit="idle" hidden></span>
+        <span data-uaios-load="normal">Load unknown</span>
+        <button type="button" data-uaios-action="handoff" title="Open or queue a fresh chat in the same Project with a continuity bootstrap.">New Chat Handoff</button>
         <details data-uaios-more>
           <summary aria-label="More Continuity actions" title="More actions">⋯</summary>
           <div data-uaios-more-menu role="menu">
+            <div data-uaios-menu-title>Actions</div>
+            <button type="button" data-uaios-action="checkpoint" role="menuitem">Save Checkpoint</button>
             <div data-uaios-menu-title>Advanced / Export</div>
             <button type="button" data-uaios-action="export-raw" role="menuitem">Download Raw JSON</button>
             <button type="button" data-uaios-action="export-handoff" role="menuitem">Download Handoff JSON</button>
@@ -10301,8 +10629,91 @@
     return false;
   }
 
+  async function uaiosContinuityAutoHandoffTick() {
+    if (!uaiosWatchdogIsEnabled() || !isConversationPage()) return false;
+    const conversationId = getConversationIdFromUrl();
+    if (!conversationId) return false;
+
+    let queue = uaiosContinuityReadAutoHandoffQueue();
+    const queuedForCurrent = queue?.source_conversation_id === conversationId;
+    if (uaiosContinuityAutoHandoffHandled(conversationId)) {
+      if (queuedForCurrent) uaiosContinuityWriteAutoHandoffQueue(null);
+      return false;
+    }
+    if (uaiosContinuityGetPendingRollover()) return false;
+
+    const load = uaiosContinuityLoadAssessment();
+    if (!uaiosContinuityAutoHandoffEligible(load) && !queuedForCurrent) return false;
+    if (!queuedForCurrent) {
+      queue = uaiosContinuityQueueAutoHandoff('threshold');
+    }
+    if (!queue) return false;
+
+    if (uaiosRateLimitIsCooling()) {
+      uaiosContinuityRenderPanel();
+      return true;
+    }
+
+    const nextAttemptAt = Number(queue.next_attempt_at || 0);
+    if (Number.isFinite(nextAttemptAt) && nextAttemptAt > Date.now()) return false;
+    if (
+      document.visibilityState !== 'visible' ||
+      uaiosAutoHandoffInFlight ||
+      uaiosCheckpointInFlight ||
+      uaiosContinuityGenerationInProgress()
+    ) {
+      return false;
+    }
+
+    uaiosAutoHandoffInFlight = true;
+    uaiosContinuityWriteAutoHandoffQueue({
+      ...queue,
+      next_attempt_at: Date.now() + UAIOS_AUTO_HANDOFF_RETRY_MS
+    });
+    uaiosContinuityRenderPanel();
+    uaiosContinuitySetPanelNote('Preparing automatic New Chat Handoff…', 'info');
+    try {
+      const record = await uaiosContinuityPrepareRollover();
+      if (!record) throw new Error('handoff preparation did not return a rollover record');
+      uaiosContinuityMarkAutoHandoffHandled(conversationId);
+      uaiosContinuityWriteAutoHandoffQueue(null);
+      uaiosWatchdogRecordEvent('auto_handoff_opened', {
+        sourceConversationId: conversationId,
+        load_level: load.level,
+        messages: load.messages,
+        chars: load.chars
+      });
+      uaiosContinuitySetPanelNote(
+        'New Chat Handoff opened automatically. Review the bootstrap, then send.',
+        'success'
+      );
+      return true;
+    } catch (error) {
+      const currentQueue = uaiosContinuityReadAutoHandoffQueue();
+      if (currentQueue?.source_conversation_id === conversationId) {
+        uaiosContinuityWriteAutoHandoffQueue({
+          ...currentQueue,
+          next_attempt_at: Date.now() + UAIOS_AUTO_HANDOFF_RETRY_MS
+        });
+      }
+      uaiosWatchdogRecordEvent('auto_handoff_failed', {
+        sourceConversationId: conversationId,
+        message: toErrorMessage(error)
+      });
+      uaiosContinuitySetPanelNote(
+        'Auto Handoff retry queued; no message was sent.',
+        'warn'
+      );
+      return false;
+    } finally {
+      uaiosAutoHandoffInFlight = false;
+      uaiosContinuityRenderPanel();
+    }
+  }
+
   async function uaiosContinuityAutoCheckpointTick() {
     if (!uaiosWatchdogIsEnabled() || !isConversationPage()) return false;
+    if (uaiosRateLimitIsCooling()) return false;
     if (document.visibilityState !== 'visible' || uaiosCheckpointInFlight || uaiosContinuityGenerationInProgress()) return false;
     const latest = uaiosContinuityLatestCheckpoint();
     const lastAt = Date.parse(latest?.captured_at || '');
@@ -10328,6 +10739,7 @@
     const tick = () => {
       uaiosContinuityEnsurePanel();
       void uaiosContinuityApplyPendingRollover();
+      void uaiosContinuityAutoHandoffTick();
       void uaiosContinuityAutoCheckpointTick();
     };
     uaiosAutoCheckpointTimer = window.setInterval(tick, 3000);
