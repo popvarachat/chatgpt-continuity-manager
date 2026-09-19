@@ -442,6 +442,8 @@ v1.8.3 makes long-chat rollover proactive. A conversation becomes eligible for a
 
 v1.8.4 compacts the floating Continuity bar to reduce screen obstruction: smaller typography, padding, drag handle and menu button; shorter status labels with explanatory hover tooltips; and **Save Checkpoint** moves under **⋯ → Actions**. Empty status notes no longer reserve a second row, while Handoff remains visible as the primary action.
 
+v1.8.5 adds a restrained semantic color system while keeping the bar theme-aware and minimal: green for Continuity ON, teal for Bridge OK, indigo for Project State, amber for cooling/elevated load, orange/red only for higher load risk, and a subdued blue Handoff action. Statuses render as soft pills on a lightly blurred surface rather than bright solid blocks.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.

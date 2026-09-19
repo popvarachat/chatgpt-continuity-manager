@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.8.4
+// @version      1.8.5
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9602,7 +9602,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.8.4';
+  const UAIOS_CONTINUITY_VERSION = '1.8.5';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -10056,16 +10056,82 @@
         position: fixed; right: 14px; bottom: 72px; z-index: 2147483000;
         display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
         width: fit-content; max-width: min(720px, calc(100vw - 28px)); padding: 5px 6px;
-        border: 1px solid rgba(127,127,127,.26); border-radius: 11px;
-        background: color-mix(in srgb, var(--main-surface-primary, #fff) 94%, transparent);
-        box-shadow: 0 6px 22px rgba(0,0,0,.12); font: 11px/1.15 system-ui, sans-serif;
+        border: 1px solid rgba(127,127,127,.22); border-radius: 11px;
+        background: color-mix(in srgb, var(--main-surface-primary, #fff) 92%, transparent);
+        box-shadow: 0 8px 26px rgba(0,0,0,.12); font: 11px/1.15 system-ui, sans-serif;
+        backdrop-filter: blur(12px) saturate(118%);
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-version],
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-bridge],
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-state],
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-rate-limit],
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-load] {
+        padding: 3px 6px; border: 1px solid rgba(127,127,127,.16); border-radius: 999px;
+        background: color-mix(in srgb, var(--main-surface-secondary, #f4f4f4) 76%, transparent);
+        font-weight: 600; letter-spacing: .005em; white-space: nowrap;
       }
       #${UAIOS_CONTINUITY_PANEL_ID} button {
-        border: 1px solid rgba(127,127,127,.24); border-radius: 7px;
-        padding: 4px 7px; background: var(--main-surface-secondary, #f4f4f4);
-        color: inherit; cursor: pointer; white-space: nowrap;
+        border: 1px solid rgba(127,127,127,.22); border-radius: 7px;
+        padding: 4px 7px; background: color-mix(in srgb, var(--main-surface-secondary, #f4f4f4) 90%, transparent);
+        color: inherit; cursor: pointer; white-space: nowrap; transition: background .16s ease, border-color .16s ease, transform .16s ease;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} button:hover:not(:disabled) {
+        background: color-mix(in srgb, #2563eb 8%, var(--main-surface-secondary, #f4f4f4));
+        border-color: color-mix(in srgb, #2563eb 34%, rgba(127,127,127,.22));
+        transform: translateY(-1px);
       }
       #${UAIOS_CONTINUITY_PANEL_ID} button:disabled { opacity: .55; cursor: wait; }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-action="toggle"][data-uaios-status="on"] {
+        color: color-mix(in srgb, #059669 82%, currentColor);
+        background: color-mix(in srgb, #10b981 10%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #10b981 34%, rgba(127,127,127,.18)); font-weight: 750;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-action="toggle"][data-uaios-status="off"] {
+        color: color-mix(in srgb, #64748b 78%, currentColor);
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-version] {
+        color: color-mix(in srgb, #64748b 74%, currentColor);
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-bridge="ok"] {
+        color: color-mix(in srgb, #0f766e 82%, currentColor);
+        background: color-mix(in srgb, #14b8a6 9%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #14b8a6 28%, rgba(127,127,127,.16));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-bridge="fail"] {
+        color: color-mix(in srgb, #b91c1c 82%, currentColor);
+        background: color-mix(in srgb, #ef4444 9%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #ef4444 30%, rgba(127,127,127,.16));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-state]:not([data-uaios-state="wait"]) {
+        color: color-mix(in srgb, #4f46e5 78%, currentColor);
+        background: color-mix(in srgb, #6366f1 8%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #6366f1 24%, rgba(127,127,127,.16));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-rate-limit="cooling"] {
+        color: color-mix(in srgb, #b45309 86%, currentColor);
+        background: color-mix(in srgb, #f59e0b 11%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #f59e0b 32%, rgba(127,127,127,.16));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-load="normal"] {
+        color: color-mix(in srgb, #475569 78%, currentColor);
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-load="elevated"] {
+        color: color-mix(in srgb, #a16207 84%, currentColor);
+        background: color-mix(in srgb, #eab308 9%, var(--main-surface-primary, #fff));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-load="high"] {
+        color: color-mix(in srgb, #c2410c 86%, currentColor);
+        background: color-mix(in srgb, #f97316 10%, var(--main-surface-primary, #fff));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} > [data-uaios-load="critical"] {
+        color: color-mix(in srgb, #b91c1c 86%, currentColor);
+        background: color-mix(in srgb, #ef4444 10%, var(--main-surface-primary, #fff));
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-action="handoff"] {
+        color: color-mix(in srgb, #1d4ed8 82%, currentColor);
+        background: color-mix(in srgb, #3b82f6 9%, var(--main-surface-primary, #fff));
+        border-color: color-mix(in srgb, #3b82f6 30%, rgba(127,127,127,.18)); font-weight: 700;
+      }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-drag-handle] {
         display: inline-flex; align-items: center; justify-content: center;
         width: 18px; height: 22px; border-radius: 6px;
@@ -10080,9 +10146,12 @@
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-note]:empty { display: none; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] { position: relative; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] > summary {
-        list-style: none; border: 1px solid rgba(127,127,127,.24); border-radius: 7px;
-        padding: 4px 8px; background: var(--main-surface-secondary, #f4f4f4);
-        color: inherit; cursor: pointer; user-select: none; font-weight: 700;
+        list-style: none; border: 1px solid rgba(127,127,127,.20); border-radius: 7px;
+        padding: 4px 8px; background: color-mix(in srgb, var(--main-surface-secondary, #f4f4f4) 88%, transparent);
+        color: color-mix(in srgb, #64748b 70%, currentColor); cursor: pointer; user-select: none; font-weight: 700;
+      }
+      #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] > summary:hover {
+        background: color-mix(in srgb, #2563eb 7%, var(--main-surface-secondary, #f4f4f4));
       }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more] > summary::-webkit-details-marker { display: none; }
       #${UAIOS_CONTINUITY_PANEL_ID} [data-uaios-more-menu] {
