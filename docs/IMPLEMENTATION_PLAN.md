@@ -30,19 +30,19 @@ Acceptance: close/reopen browser and recover the same checkpoint without the old
 - Provide one-click creation/copy flow for a fresh chat bootstrap.
 Acceptance: a fresh chat can resume from the capsule with no dependency on a response from the old chat.
 
-## Phase 4 — Canonical evidence adapters
-- Define provider-neutral evidence records.
-- Resolve GitHub branch/PR/SHA/check state from GitHub rather than conversation text.
-- Keep orchestrator-specific state behind adapters.
+## Phase 4 — Canonical evidence integration — DELEGATED TO UAIOS
+- Do not add independent GitHub/n8n/Cloudflare evidence clients to the browser extension.
+- Keep provider-neutral evidence pointer fields in the local checkpoint schema only where useful.
+- ChatGPT/UAIOS performs fresh verification against canonical sources when mutable state matters.
 
-Acceptance: stale conversation claims cannot overwrite newer verified evidence.
+Acceptance: local continuity can carry evidence pointers without claiming external state is current.
 
-## Phase 5 — UAIOS/n8n integration
-- Add an explicit opt-in adapter contract for checkpoint and handoff events.
-- Keep private URLs, credentials, routing, and company data outside this public fork.
-- Implement the real Practika adapter in the private UAIOS control-plane repository.
+## Phase 5 — UAIOS integration — HOLD / CONTRACT-ONLY
+- Do not add direct n8n credentials, provider credentials, private routing, or orchestration authority to this public extension.
+- If a future need is proven, define only a bounded UAIOS-owned checkpoint/handoff exchange contract with explicit opt-in.
+- The real Practika integration remains in the private UAIOS control plane.
 
-Acceptance: browser-side module works fully local when the adapter is disabled, and emits only approved fields when enabled.
+Acceptance: browser-side continuity remains fully functional offline/local; external integration cannot become a second control plane.
 
 ## Upstream sync policy
 - Keep `upstream` remote pointed at `SunnyLeu/ChatGPT-Conversation-Handoff-Exporter`.
@@ -67,3 +67,16 @@ Acceptance: browser-side module works fully local when the adapter is disabled, 
 
 - Phase 3B.2: v1.7.1 upgrades Project State Autopilot to v2. It prefers the newest 12 messages, treats the latest assistant PASS/resolution as the blocker freshness boundary, and extracts the next action from the latest assistant response with English/Thai action cues. Goal: resolved historical failures do not reappear as current blockers after handoff.
 - Phase 3B.3: v1.7.2 prevents bootstrap self-reference by excluding continuity bootstrap messages from state derivation and upgrading pending legacy bootstrap payloads to Autopilot v2 before hydration.
+
+
+## Final Flow alignment — 2026-09-20
+
+Following UAIOS consolidation, further feature work should prefer reliability and browser-local recovery over expansion into external orchestration.
+
+Priority:
+1. maintain compatibility with ChatGPT UI changes;
+2. preserve safe checkpoint/recovery/handoff behavior;
+3. improve bounded local state quality from real usage;
+4. keep all external authority delegated to UAIOS.
+
+Do not implement direct n8n/GitHub/Cloudflare control surfaces here merely because they are technically possible.
