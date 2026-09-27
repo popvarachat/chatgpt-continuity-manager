@@ -446,6 +446,8 @@ v1.8.5 adds a restrained semantic color system while keeping the bar theme-aware
 
 v1.8.6 fixes first-use Handoff. If a conversation has no validated checkpoint yet, pressing **New Chat Handoff** now creates the first checkpoint automatically, prepares the rollover, opens a fresh chat in the same Project through the extension bridge, and hydrates the bootstrap. The user no longer has to open `⋯ → Save Checkpoint` first, and the bootstrap still is never auto-sent.
 
+v1.8.7 adds a Continuity-only DOM fallback for pages where ChatGPT has already rendered the conversation but the extension did not observe reusable backend request context. In that narrow case, Checkpoint/Handoff reads the visible user/assistant message DOM to build the bounded continuity capsule and marks its transport as `dom-continuity-fallback`. Raw/Handoff JSON export remains strict and still requires authoritative backend transport/integrity validation; the fallback is not used to weaken export guarantees.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.

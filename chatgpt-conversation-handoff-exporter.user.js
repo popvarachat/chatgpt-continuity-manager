@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.8.6
+// @version      1.8.7
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9468,15 +9468,76 @@
     });
     return record;
   }
+  function uaiosContinuityCanUseDomFallback(error) {
+    const message = toErrorMessage(error);
+    return (
+      /無法取得[^。]*request context/i.test(message) ||
+      /缺少[^。]*request context/i.test(message) ||
+      /目前無法取得此對話的[^。]*請求資訊/i.test(message)
+    );
+  }
+
+  function uaiosContinuityBuildDomFallbackHandoff(conversationId) {
+    const nodes = Array.from(document.querySelectorAll(
+      '[data-message-author-role="user"], [data-message-author-role="assistant"]'
+    ));
+    const messages = [];
+    let lastKey = '';
+    for (const node of nodes) {
+      const role = String(node.getAttribute('data-message-author-role') || '').trim();
+      if (role !== 'user' && role !== 'assistant') continue;
+      const content = String(node.innerText || node.textContent || '')
+        .replace(/\u00a0/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      if (!content) continue;
+      const key = `${role}\n${content}`;
+      if (key === lastKey) continue;
+      lastKey = key;
+      messages.push({
+        id: `dom-${messages.length + 1}`,
+        role,
+        content
+      });
+    }
+    if (!messages.length) {
+      throw new Error('Continuity fallback could not read any visible conversation messages.');
+    }
+    const pageTitle = String(document.title || '')
+      .replace(/\s*\|\s*ChatGPT\s*$/i, '')
+      .trim();
+    return {
+      conversation_id: conversationId,
+      title: pageTitle && pageTitle.toLowerCase() !== 'chatgpt' ? pageTitle : null,
+      update_time: null,
+      messages,
+      textdocs: []
+    };
+  }
+
   async function uaiosContinuityCheckpointNow() {
     const conversationId = getConversationIdFromUrl();
     if (!conversationId || !isConversationPage()) {
       throw new Error('Checkpoint requires an active ChatGPT conversation page.');
     }
-    const result = await createHandoffPayloadForConversationId(conversationId, {
-      enforceCurrentPage: true
-    });
-    const handoff = JSON.parse(result.handoffPayload.text);
+    let handoff;
+    let checkpointTransport = null;
+    try {
+      const result = await createHandoffPayloadForConversationId(conversationId, {
+        enforceCurrentPage: true
+      });
+      handoff = JSON.parse(result.handoffPayload.text);
+      checkpointTransport = result.transport || null;
+    } catch (error) {
+      if (!uaiosContinuityCanUseDomFallback(error)) throw error;
+      handoff = uaiosContinuityBuildDomFallbackHandoff(conversationId);
+      checkpointTransport = 'dom-continuity-fallback';
+      uaiosWatchdogRecordEvent('checkpoint_dom_fallback', {
+        scope: uaiosContinuityScopeId(),
+        conversationId,
+        messageCount: handoff.messages.length
+      });
+    }
     const allMessages = Array.isArray(handoff.messages) ? handoff.messages : [];
     const recentMessages = allMessages.slice(-UAIOS_CHECKPOINT_MESSAGE_LIMIT).map((message) => ({
       id: message.id,
@@ -9509,7 +9570,7 @@
       recent_messages: recentMessages,
       textdocs,
       project_state: projectState,
-      transport: result.transport || null
+      transport: checkpointTransport
     };
     return uaiosContinuitySaveCheckpointRecord(record);
   }
@@ -9602,7 +9663,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.8.6';
+  const UAIOS_CONTINUITY_VERSION = '1.8.7';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
