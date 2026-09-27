@@ -448,6 +448,8 @@ v1.8.6 fixes first-use Handoff. If a conversation has no validated checkpoint ye
 
 v1.8.7 adds a Continuity-only DOM fallback for pages where ChatGPT has already rendered the conversation but the extension did not observe reusable backend request context. In that narrow case, Checkpoint/Handoff reads the visible user/assistant message DOM to build the bounded continuity capsule and marks its transport as `dom-continuity-fallback`. Raw/Handoff JSON export remains strict and still requires authoritative backend transport/integrity validation; the fallback is not used to weaken export guarantees.
 
+v1.8.8 broadens that Continuity fallback for newer ChatGPT markup. It tries explicit author-role nodes first, then `conversation-turn-*` containers, then article turns; if none of those exist it falls back to the rendered main conversation text after removing controls/composer UI. This fallback remains bounded and Continuity-only.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.

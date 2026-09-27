@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.8.7
+// @version      1.8.8
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9477,31 +9477,97 @@
     );
   }
 
+  function uaiosContinuityNormalizeDomText(value) {
+    return String(value || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function uaiosContinuityInferDomTurnRole(node, index) {
+    const direct = String(node?.getAttribute?.('data-message-author-role') || '').trim();
+    if (direct === 'user' || direct === 'assistant') return direct;
+    const nested = node?.querySelector?.('[data-message-author-role="user"], [data-message-author-role="assistant"]');
+    const nestedRole = String(nested?.getAttribute?.('data-message-author-role') || '').trim();
+    if (nestedRole === 'user' || nestedRole === 'assistant') return nestedRole;
+
+    const classText = String(node?.className || '').toLowerCase();
+    const testId = String(node?.getAttribute?.('data-testid') || '').toLowerCase();
+    const aria = String(node?.getAttribute?.('aria-label') || '').toLowerCase();
+    const probe = `${classText} ${testId} ${aria}`;
+    if (/\b(user|human)-turn\b|\buser-message\b/.test(probe)) return 'user';
+    if (/\b(agent|assistant)-turn\b|\bassistant-message\b/.test(probe)) return 'assistant';
+
+    const accessible = uaiosContinuityNormalizeDomText(
+      node?.querySelector?.('h5, [aria-label*="said" i], [aria-label*="พูด" i]')?.textContent || ''
+    ).toLowerCase();
+    if (/you said|คุณพูด|user/.test(accessible)) return 'user';
+    if (/chatgpt said|assistant|ผู้ช่วย/.test(accessible)) return 'assistant';
+
+    return index % 2 === 0 ? 'user' : 'assistant';
+  }
+
+  function uaiosContinuityExtractDomTurnText(node) {
+    const preferred = node?.querySelector?.(
+      '[data-message-content], .markdown, [class*="markdown"], [class*="message-content"]'
+    );
+    return uaiosContinuityNormalizeDomText(
+      preferred?.innerText || preferred?.textContent || node?.innerText || node?.textContent || ''
+    );
+  }
+
   function uaiosContinuityBuildDomFallbackHandoff(conversationId) {
-    const nodes = Array.from(document.querySelectorAll(
-      '[data-message-author-role="user"], [data-message-author-role="assistant"]'
-    ));
+    const selectorSets = [
+      '[data-message-author-role="user"], [data-message-author-role="assistant"]',
+      '[data-testid^="conversation-turn-"]',
+      'article'
+    ];
+    let nodes = [];
+    for (const selector of selectorSets) {
+      nodes = Array.from(document.querySelectorAll(selector));
+      if (nodes.length) break;
+    }
+
     const messages = [];
     let lastKey = '';
-    for (const node of nodes) {
-      const role = String(node.getAttribute('data-message-author-role') || '').trim();
-      if (role !== 'user' && role !== 'assistant') continue;
-      const content = String(node.innerText || node.textContent || '')
-        .replace(/\u00a0/g, ' ')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
-      if (!content) continue;
+    nodes.forEach((node, index) => {
+      if (node.closest?.(`#${UAIOS_CONTINUITY_PANEL_ID}`)) return;
+      const content = uaiosContinuityExtractDomTurnText(node);
+      if (!content || content.length < 2) return;
+      const role = uaiosContinuityInferDomTurnRole(node, index);
       const key = `${role}\n${content}`;
-      if (key === lastKey) continue;
+      if (key === lastKey) return;
       lastKey = key;
       messages.push({
         id: `dom-${messages.length + 1}`,
         role,
-        content
+        content: uaiosContinuityBoundString(content)
       });
-    }
+    });
+
     if (!messages.length) {
-      throw new Error('Continuity fallback could not read any visible conversation messages.');
+      const main = document.querySelector('main, [role="main"]');
+      if (main) {
+        const clone = main.cloneNode(true);
+        clone.querySelectorAll?.(
+          `#${UAIOS_CONTINUITY_PANEL_ID}, form, textarea, [contenteditable="true"], nav, footer, button, [role="button"]`
+        ).forEach((element) => element.remove());
+        const visibleText = uaiosContinuityNormalizeDomText(clone.innerText || clone.textContent || '');
+        if (visibleText) {
+          messages.push({
+            id: 'dom-visible-snapshot-1',
+            role: 'assistant',
+            content: uaiosContinuityBoundString(
+              'VISIBLE CONVERSATION SNAPSHOT (Continuity fallback)\n' + visibleText
+            )
+          });
+        }
+      }
+    }
+
+    if (!messages.length) {
+      throw new Error('Continuity fallback could not read any rendered conversation text.');
     }
     const pageTitle = String(document.title || '')
       .replace(/\s*\|\s*ChatGPT\s*$/i, '')
@@ -9663,7 +9729,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.8.7';
+  const UAIOS_CONTINUITY_VERSION = '1.8.8';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';

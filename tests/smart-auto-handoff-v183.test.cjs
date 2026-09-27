@@ -6,9 +6,9 @@ const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'chatgpt-conversation-handoff-exporter.user.js'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 
-assert.strictEqual(manifest.version, '1.8.7');
-assert.match(source, /@version\s+1\.8\.7/);
-assert.match(source, /UAIOS_CONTINUITY_VERSION = '1\.8\.7'/);
+assert.strictEqual(manifest.version, '1.8.8');
+assert.match(source, /@version\s+1\.8\.8/);
+assert.match(source, /UAIOS_CONTINUITY_VERSION = '1\.8\.8'/);
 assert.match(source, /UAIOS_AUTO_HANDOFF_MESSAGE_THRESHOLD = 110/);
 assert.match(source, /UAIOS_AUTO_HANDOFF_CHAR_THRESHOLD = 150000/);
 assert.match(source, /function uaiosContinuityAutoHandoffEligible\(/);
@@ -25,6 +25,10 @@ assert.match(source, /data-message-author-role="user"/);
 assert.match(source, /data-message-author-role="assistant"/);
 assert.match(source, /checkpointTransport = 'dom-continuity-fallback'/);
 assert.match(source, /if \(!uaiosContinuityCanUseDomFallback\(error\)\) throw error/);
+assert.match(source, /\[data-testid\^="conversation-turn-"\]/);
+assert.match(source, /'article'/);
+assert.match(source, /document\.querySelector\('main, \[role="main"\]'\)/);
+assert.match(source, /VISIBLE CONVERSATION SNAPSHOT \(Continuity fallback\)/);
 
 const handoffDisabledLine = source.match(/handoff\.disabled = ([^;]+);/);
 assert.ok(handoffDisabledLine, 'handoff disabled assignment must exist');
