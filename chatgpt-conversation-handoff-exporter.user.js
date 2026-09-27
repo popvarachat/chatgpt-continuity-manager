@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.8.5
+// @version      1.8.6
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -9602,7 +9602,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.8.5';
+  const UAIOS_CONTINUITY_VERSION = '1.8.6';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
@@ -10543,7 +10543,11 @@
       try {
         const stagedRecord = uaiosContinuityStageRollover();
         if (!stagedRecord) {
-          uaiosContinuitySetPanelNote('No validated checkpoint yet. Save Checkpoint once, then retry Handoff.', 'warn');
+          uaiosContinuitySetPanelNote('Creating first checkpoint and preparing Handoff…', 'info');
+          const record = await uaiosContinuityPrepareRollover();
+          if (!record) throw new Error('first checkpoint handoff did not return a rollover record');
+          uaiosContinuityMarkAutoHandoffHandled(record.source_conversation_id);
+          uaiosContinuityWriteAutoHandoffQueue(null);
           return;
         }
         preopenedTab = window.open(stagedRecord.project_href, '_blank');
@@ -10551,8 +10555,9 @@
           try { preopenedTab.opener = null; } catch (_) {}
         }
         uaiosContinuitySetPanelNote('Handoff staged locally; refreshing checkpoint…', 'info');
-        await uaiosContinuityPrepareRollover(preopenedTab, stagedRecord);
-        uaiosContinuityMarkAutoHandoffHandled(stagedRecord.source_conversation_id);
+        const record = await uaiosContinuityPrepareRollover(preopenedTab, stagedRecord);
+        if (!record) throw new Error('handoff preparation did not return a rollover record');
+        uaiosContinuityMarkAutoHandoffHandled(record.source_conversation_id);
         uaiosContinuityWriteAutoHandoffQueue(null);
       } catch (error) {
         try { if (preopenedTab && !preopenedTab.closed) preopenedTab.close(); } catch (_) {}

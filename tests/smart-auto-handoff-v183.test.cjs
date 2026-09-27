@@ -6,9 +6,9 @@ const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'chatgpt-conversation-handoff-exporter.user.js'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 
-assert.strictEqual(manifest.version, '1.8.5');
-assert.match(source, /@version\s+1\.8\.5/);
-assert.match(source, /UAIOS_CONTINUITY_VERSION = '1\.8\.5'/);
+assert.strictEqual(manifest.version, '1.8.6');
+assert.match(source, /@version\s+1\.8\.6/);
+assert.match(source, /UAIOS_CONTINUITY_VERSION = '1\.8\.6'/);
 assert.match(source, /UAIOS_AUTO_HANDOFF_MESSAGE_THRESHOLD = 110/);
 assert.match(source, /UAIOS_AUTO_HANDOFF_CHAR_THRESHOLD = 150000/);
 assert.match(source, /function uaiosContinuityAutoHandoffEligible\(/);
@@ -17,6 +17,9 @@ assert.match(source, /async function uaiosContinuityAutoHandoffTick\(/);
 assert.match(source, /void uaiosContinuityAutoHandoffTick\(\)/);
 assert.match(source, /Handoff QUEUED/);
 assert.match(source, /Queue Handoff/);
+assert.match(source, /Creating first checkpoint and preparing Handoff/);
+assert.doesNotMatch(source, /No validated checkpoint yet\. Save Checkpoint once, then retry Handoff/);
+assert.match(source, /if \(!stagedRecord\) \{[\s\S]*?uaiosContinuityPrepareRollover\(\)/);
 
 const handoffDisabledLine = source.match(/handoff\.disabled = ([^;]+);/);
 assert.ok(handoffDisabledLine, 'handoff disabled assignment must exist');

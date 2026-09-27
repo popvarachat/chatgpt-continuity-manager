@@ -444,6 +444,8 @@ v1.8.4 compacts the floating Continuity bar to reduce screen obstruction: smalle
 
 v1.8.5 adds a restrained semantic color system while keeping the bar theme-aware and minimal: green for Continuity ON, teal for Bridge OK, indigo for Project State, amber for cooling/elevated load, orange/red only for higher load risk, and a subdued blue Handoff action. Statuses render as soft pills on a lightly blurred surface rather than bright solid blocks.
 
+v1.8.6 fixes first-use Handoff. If a conversation has no validated checkpoint yet, pressing **New Chat Handoff** now creates the first checkpoint automatically, prepares the rollover, opens a fresh chat in the same Project through the extension bridge, and hydrates the bootstrap. The user no longer has to open `⋯ → Save Checkpoint` first, and the bootstrap still is never auto-sent.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.
