@@ -6,9 +6,9 @@ const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'chatgpt-conversation-handoff-exporter.user.js'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 
-assert.strictEqual(manifest.version, '1.8.8');
-assert.match(source, /@version\s+1\.8\.8/);
-assert.match(source, /UAIOS_CONTINUITY_VERSION = '1\.8\.8'/);
+assert.strictEqual(manifest.version, '1.8.9');
+assert.match(source, /@version\s+1\.8\.9/);
+assert.match(source, /UAIOS_CONTINUITY_VERSION = '1\.8\.9'/);
 assert.match(source, /UAIOS_AUTO_HANDOFF_MESSAGE_THRESHOLD = 110/);
 assert.match(source, /UAIOS_AUTO_HANDOFF_CHAR_THRESHOLD = 150000/);
 assert.match(source, /function uaiosContinuityAutoHandoffEligible\(/);
@@ -28,7 +28,13 @@ assert.match(source, /if \(!uaiosContinuityCanUseDomFallback\(error\)\) throw er
 assert.match(source, /\[data-testid\^="conversation-turn-"\]/);
 assert.match(source, /'article'/);
 assert.match(source, /document\.querySelector\('main, \[role="main"\]'\)/);
-assert.match(source, /VISIBLE CONVERSATION SNAPSHOT \(Continuity fallback\)/);
+assert.match(source, /UAIOS_DOM_FALLBACK_TURN_LIMIT = 8/);
+assert.match(source, /UAIOS_DOM_FALLBACK_TURN_CHARS = 2500/);
+assert.match(source, /UAIOS_DOM_FALLBACK_EXCERPT_CHARS = 2400/);
+assert.match(source, /messages\.slice\(-UAIOS_DOM_FALLBACK_TURN_LIMIT\)/);
+assert.match(source, /fallback_context_excerpt/);
+assert.match(source, /autopilot-v2-dom-fallback/);
+assert.doesNotMatch(source, /VISIBLE CONVERSATION SNAPSHOT \(Continuity fallback\)/);
 
 const handoffDisabledLine = source.match(/handoff\.disabled = ([^;]+);/);
 assert.ok(handoffDisabledLine, 'handoff disabled assignment must exist');

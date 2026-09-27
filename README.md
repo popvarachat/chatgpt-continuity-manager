@@ -450,6 +450,8 @@ v1.8.7 adds a Continuity-only DOM fallback for pages where ChatGPT has already r
 
 v1.8.8 broadens that Continuity fallback for newer ChatGPT markup. It tries explicit author-role nodes first, then `conversation-turn-*` containers, then article turns; if none of those exist it falls back to the rendered main conversation text after removing controls/composer UI. This fallback remains bounded and Continuity-only.
 
+v1.8.9 makes DOM fallback compact and state-first. It keeps only the latest **8 rendered turns** (max **2,500 characters per turn**) for `recent_messages`, derives a structured Project State from those turns, and removes the old large `VISIBLE CONVERSATION SNAPSHOT` message. If turn-level markup still cannot be found, only a bounded **2,400-character recent excerpt** is carried as `fallback_context_excerpt` and treated as secondary orientation. This keeps the handoff prompt shorter and prevents a large page dump from becoming the apparent current task.
+
 ### Proactive session rollover (v1.3)
 
 When Continuity is ON, the extension keeps a validated local checkpoint for the visible active conversation at most once every 10 minutes. The panel shows a **heuristic conversation load** based on message count and message text size; this is not an OpenAI token meter and does not claim to know the model context limit.

@@ -2,7 +2,7 @@
 // @name         ChatGPT 對話 JSON 與交接檔匯出工具
 // @name:en      ChatGPT Continuity Manager (UAIOS fork)
 // @namespace    https://github.com/popvarachat/chatgpt-continuity-manager
-// @version      1.8.8
+// @version      1.8.9
 // @description  在 ChatGPT 對話頁匯出目前對話的 raw / handoff JSON，並支援雙區域獨立 session、可追加佇列、移除項目與延後打包。
 // @description:en Export ChatGPT conversations as raw/handoff JSON and optionally recover Retry/Continue interruptions with a local rate-limited watchdog.
 // @author       SunnyLeu
@@ -8866,6 +8866,9 @@
   const UAIOS_CHECKPOINT_MESSAGE_LIMIT = 12;
   const UAIOS_CHECKPOINT_MESSAGE_CHARS = 4000;
   const UAIOS_CHECKPOINT_ARRAY_LIMIT = 50;
+  const UAIOS_DOM_FALLBACK_TURN_LIMIT = 8;
+  const UAIOS_DOM_FALLBACK_TURN_CHARS = 2500;
+  const UAIOS_DOM_FALLBACK_EXCERPT_CHARS = 2400;
   const UAIOS_RECOVERY_DB_NAME = 'uaios-continuity-recovery-v1';
   const UAIOS_RECOVERY_DB_VERSION = 1;
   const UAIOS_RECOVERY_STORE = 'checkpointHistory';
@@ -9496,8 +9499,8 @@
     const testId = String(node?.getAttribute?.('data-testid') || '').toLowerCase();
     const aria = String(node?.getAttribute?.('aria-label') || '').toLowerCase();
     const probe = `${classText} ${testId} ${aria}`;
-    if (/\b(user|human)-turn\b|\buser-message\b/.test(probe)) return 'user';
-    if (/\b(agent|assistant)-turn\b|\bassistant-message\b/.test(probe)) return 'assistant';
+    if (/\b(user|human)-turn\b|\buser-message\b|whitespace-pre-wrap/.test(probe)) return 'user';
+    if (/\b(agent|assistant)-turn\b|\bassistant-message\b|\bmarkdown\b/.test(probe)) return 'assistant';
 
     const accessible = uaiosContinuityNormalizeDomText(
       node?.querySelector?.('h5, [aria-label*="said" i], [aria-label*="พูด" i]')?.textContent || ''
@@ -9517,56 +9520,73 @@
     );
   }
 
-  function uaiosContinuityBuildDomFallbackHandoff(conversationId) {
-    const selectorSets = [
+  function uaiosContinuityTailExcerpt(value, maxChars = UAIOS_DOM_FALLBACK_EXCERPT_CHARS) {
+    const text = uaiosContinuityNormalizeDomText(value);
+    if (!text || text.length <= maxChars) return text;
+    const tail = text.slice(-maxChars);
+    const firstBreak = tail.indexOf('\n');
+    return '…[recent rendered excerpt]\n' + (firstBreak >= 0 ? tail.slice(firstBreak + 1) : tail);
+  }
+
+  function uaiosContinuityFindDomTurnNodes() {
+    const structuralSelectors = [
       '[data-message-author-role="user"], [data-message-author-role="assistant"]',
       '[data-testid^="conversation-turn-"]',
       'article'
     ];
-    let nodes = [];
-    for (const selector of selectorSets) {
-      nodes = Array.from(document.querySelectorAll(selector));
-      if (nodes.length) break;
+    for (const selector of structuralSelectors) {
+      const nodes = Array.from(document.querySelectorAll(selector));
+      if (nodes.length) return nodes;
     }
+    return Array.from(document.querySelectorAll([
+      'main [data-message-content]',
+      'main [class*="user-message"]',
+      'main [class*="whitespace-pre-wrap"]',
+      'main .markdown',
+      'main [class*="markdown"]'
+    ].join(', ')));
+  }
 
+  function uaiosContinuityBuildDomFallbackHandoff(conversationId) {
+    const nodes = uaiosContinuityFindDomTurnNodes();
     const messages = [];
-    let lastKey = '';
+    const seen = new Set();
     nodes.forEach((node, index) => {
       if (node.closest?.(`#${UAIOS_CONTINUITY_PANEL_ID}`)) return;
       const content = uaiosContinuityExtractDomTurnText(node);
       if (!content || content.length < 2) return;
       const role = uaiosContinuityInferDomTurnRole(node, index);
-      const key = `${role}\n${content}`;
-      if (key === lastKey) return;
-      lastKey = key;
+      const bounded = uaiosContinuityBoundString(content, UAIOS_DOM_FALLBACK_TURN_CHARS);
+      const key = `${role}\n${bounded}`;
+      if (seen.has(key)) return;
+      seen.add(key);
       messages.push({
         id: `dom-${messages.length + 1}`,
         role,
-        content: uaiosContinuityBoundString(content)
+        content: bounded
       });
     });
 
-    if (!messages.length) {
+    const recentTurns = messages.slice(-UAIOS_DOM_FALLBACK_TURN_LIMIT).map((message, index) => ({
+      ...message,
+      id: `dom-recent-${index + 1}`
+    }));
+
+    let continuityContextExcerpt = '';
+    if (!recentTurns.length) {
       const main = document.querySelector('main, [role="main"]');
       if (main) {
         const clone = main.cloneNode(true);
         clone.querySelectorAll?.(
           `#${UAIOS_CONTINUITY_PANEL_ID}, form, textarea, [contenteditable="true"], nav, footer, button, [role="button"]`
         ).forEach((element) => element.remove());
-        const visibleText = uaiosContinuityNormalizeDomText(clone.innerText || clone.textContent || '');
-        if (visibleText) {
-          messages.push({
-            id: 'dom-visible-snapshot-1',
-            role: 'assistant',
-            content: uaiosContinuityBoundString(
-              'VISIBLE CONVERSATION SNAPSHOT (Continuity fallback)\n' + visibleText
-            )
-          });
-        }
+        continuityContextExcerpt = uaiosContinuityTailExcerpt(
+          clone.innerText || clone.textContent || ''
+        );
       }
     }
 
-    if (!messages.length) {
+    if (!recentTurns.length && !continuityContextExcerpt) {
       throw new Error('Continuity fallback could not read any rendered conversation text.');
     }
     const pageTitle = String(document.title || '')
@@ -9576,7 +9596,8 @@
       conversation_id: conversationId,
       title: pageTitle && pageTitle.toLowerCase() !== 'chatgpt' ? pageTitle : null,
       update_time: null,
-      messages,
+      messages: recentTurns,
+      continuity_context_excerpt: continuityContextExcerpt || null,
       textdocs: []
     };
   }
@@ -9613,6 +9634,10 @@
         ? message.cite_sources.slice(0, 20)
         : undefined
     }));
+    const fallbackContextExcerpt = uaiosContinuityBoundString(
+      handoff.continuity_context_excerpt || '',
+      UAIOS_DOM_FALLBACK_EXCERPT_CHARS
+    );
     const textdocs = Array.isArray(handoff.textdocs)
       ? handoff.textdocs.slice(0, 50).map((doc) => ({
         id: doc.id ?? null,
@@ -9621,7 +9646,21 @@
         updated_at: doc.updated_at ?? null
       }))
       : [];
-    const autoProjectState = uaiosContinuityDeriveProjectState(allMessages, handoff.title || '');
+    const stateMessages = allMessages.length
+      ? allMessages
+      : fallbackContextExcerpt
+        ? [{ id: 'dom-context-excerpt', role: 'assistant', content: fallbackContextExcerpt }]
+        : [];
+    let autoProjectState = uaiosContinuityDeriveProjectState(stateMessages, handoff.title || '');
+    if (checkpointTransport === 'dom-continuity-fallback') {
+      autoProjectState = uaiosContinuitySanitizeState({
+        ...autoProjectState,
+        state_source: 'autopilot-v2-dom-fallback',
+        notes: allMessages.length
+          ? 'Auto-derived from the latest rendered conversation turns because authoritative backend request context was unavailable. Re-verify mutable external status from canonical sources.'
+          : 'Auto-derived from a bounded recent rendered excerpt because turn-level DOM and authoritative backend request context were unavailable. Re-verify mutable external status from canonical sources.'
+      });
+    }
     const projectState = uaiosContinuityMergeProjectState(autoProjectState, uaiosContinuityGetState());
     const record = {
       schema_version: 1,
@@ -9632,8 +9671,10 @@
       title: handoff.title || null,
       source_update_time: handoff.update_time || null,
       total_message_count: allMessages.length,
-      total_content_chars: allMessages.reduce((sum, message) => sum + String(message?.content || '').length, 0),
+      total_content_chars: allMessages.reduce((sum, message) => sum + String(message?.content || '').length, 0) +
+        fallbackContextExcerpt.length,
       recent_messages: recentMessages,
+      fallback_context_excerpt: fallbackContextExcerpt || null,
       textdocs,
       project_state: projectState,
       transport: checkpointTransport
@@ -9657,6 +9698,8 @@
       total_content_chars: checkpoint.total_content_chars || 0,
       project_state: projectState,
       recent_messages: checkpoint.recent_messages || [],
+      fallback_context_excerpt: checkpoint.fallback_context_excerpt || null,
+      transport: checkpoint.transport || null,
       textdocs: checkpoint.textdocs || []
     };
     return [
@@ -9664,6 +9707,7 @@
       'Use the Project State Snapshot for orientation, then use recent evidence and canonical sources to verify mutable status.',
       'Do not assume old branch/PR/workflow status is still current solely because it appears below.',
       'If project_state is missing or stale, reconstruct a provisional project state from recent_messages before continuing.',
+      'If recent_messages are sparse and fallback_context_excerpt is present, use that excerpt only as secondary orientation, not as a verbatim task specification.',
       'Prioritize the latest explicit user goal, completed work, blockers, decisions, verified evidence, and next action.',
       'Do not ask the user to repeat context already present in this bootstrap. Continue when the next action is clear.',
       '',
@@ -9729,7 +9773,7 @@
   // UAIOS_08E - proactive session rollover and visible controls
   // ============================================================
   const UAIOS_PENDING_ROLLOVERS_KEY = 'uaios.continuity.pendingRollovers.v1';
-  const UAIOS_CONTINUITY_VERSION = '1.8.8';
+  const UAIOS_CONTINUITY_VERSION = '1.8.9';
   const UAIOS_BRIDGE_MAIN_SOURCE = 'uaios-continuity-main-v1';
   const UAIOS_BRIDGE_REPLY_SOURCE = 'uaios-continuity-bridge-v1';
   const UAIOS_BRIDGE_REQUEST_MAILBOX_ID = 'uaios-continuity-bridge-request-mailbox';
