@@ -32,5 +32,6 @@ jobs:
           node tests/rate-limit-v182.test.cjs
           node tests/smart-auto-handoff-v183.test.cjs
           node tests/chat-steward-engine.test.cjs
+          node tests/chat-steward-inventory.test.cjs
       - name: Manifest parse
         run: node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"

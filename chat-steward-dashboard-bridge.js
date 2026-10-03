@@ -8,7 +8,7 @@
   const REPLY_ID = 'uaios-chat-steward-reply-mailbox';
   const PAGE_SOURCE = 'uaios-chat-steward-page-v1';
   const BRIDGE_SOURCE = 'uaios-chat-steward-bridge-v1';
-  const MAX_RECORDS = 2500;
+  const MAX_RECORDS = 10000;
   const engine = globalThis.ChatStewardEngine;
   if (!engine) return;
 
@@ -39,8 +39,29 @@
     return {
       enabled: raw.enabled !== false,
       autoScanVisitedChats: raw.autoScanVisitedChats !== false,
+      autoFullInventory: raw.autoFullInventory !== false,
+      includeArchived: raw.includeArchived !== false,
+      includeProjects: raw.includeProjects !== false,
+      inventoryRefreshHours: Number.isFinite(Number(raw.inventoryRefreshHours))
+        ? Math.max(1, Math.min(168, Number(raw.inventoryRefreshHours)))
+        : 24,
       projectProfiles: engine.normalizeProjectProfiles(raw.projectProfiles)
     };
+  }
+
+  async function readMeta() {
+    const data = await chrome.storage.local.get(META_KEY);
+    return data?.[META_KEY] && typeof data[META_KEY] === 'object' ? data[META_KEY] : {};
+  }
+
+  async function patchMeta(patch) {
+    const current = await readMeta();
+    const next = { ...current, ...patch };
+    if (patch.inventory && typeof patch.inventory === 'object') {
+      next.inventory = { ...(current.inventory || {}), ...patch.inventory };
+    }
+    await chrome.storage.local.set({ [META_KEY]: next });
+    return next;
   }
 
   function trimRegistry(records) {
@@ -83,6 +104,7 @@
       first_seen_at: existing?.first_seen_at || nowIso(),
       last_seen_at: nowIso(),
       message_count: classified.analysis.signals.message_count,
+      analysis_state: 'DONE',
       suggestion: classified.analysis,
       duplicate_of: duplicate.similar_record_id ? { id: duplicate.similar_record_id, title: duplicate.similar_title, score: duplicate.score } : null,
       decision: existing?.decision || { status: null, project: null, note: '', decided_at: null }
@@ -94,6 +116,7 @@
     registry.records[id] = record;
     registry.records = trimRegistry(registry.records);
     await chrome.storage.local.set({ [REGISTRY_KEY]: registry });
+    await patchMeta({ record_count: Object.keys(registry.records).length });
     return record;
   }
 
@@ -101,9 +124,15 @@
     const registry = await readRegistry();
     const record = registry.records[id];
     if (!record) throw new Error('Record not found.');
-    const status = patch.hasOwnProperty('status') ? safeStatus(patch.status) : record?.decision?.status || null;
-    const project = patch.hasOwnProperty('project') ? String(patch.project || '').trim().slice(0, 160) || null : record?.decision?.project || null;
-    const note = patch.hasOwnProperty('note') ? String(patch.note || '').trim().slice(0, 1200) : String(record?.decision?.note || '');
+    const status = Object.prototype.hasOwnProperty.call(patch, 'status')
+      ? safeStatus(patch.status)
+      : record?.decision?.status || null;
+    const project = Object.prototype.hasOwnProperty.call(patch, 'project')
+      ? String(patch.project || '').trim().slice(0, 160) || null
+      : record?.decision?.project || null;
+    const note = Object.prototype.hasOwnProperty.call(patch, 'note')
+      ? String(patch.note || '').trim().slice(0, 1200)
+      : String(record?.decision?.note || '');
     record.decision = { status, project, note, decided_at: nowIso() };
     registry.updated_at = nowIso();
     await chrome.storage.local.set({ [REGISTRY_KEY]: registry });
@@ -126,6 +155,7 @@
     delete registry.records[id];
     registry.updated_at = nowIso();
     await chrome.storage.local.set({ [REGISTRY_KEY]: registry });
+    await patchMeta({ record_count: Object.keys(registry.records).length });
     return { removed: existed };
   }
 
@@ -133,23 +163,44 @@
     const normalized = {
       enabled: config.enabled !== false,
       autoScanVisitedChats: config.autoScanVisitedChats !== false,
+      autoFullInventory: config.autoFullInventory !== false,
+      includeArchived: config.includeArchived !== false,
+      includeProjects: config.includeProjects !== false,
+      inventoryRefreshHours: Number.isFinite(Number(config.inventoryRefreshHours))
+        ? Math.max(1, Math.min(168, Number(config.inventoryRefreshHours)))
+        : 24,
       projectProfiles: engine.normalizeProjectProfiles(config.projectProfiles)
     };
     await chrome.storage.local.set({ [CONFIG_KEY]: normalized });
     return normalized;
   }
 
+  async function startFullScan(force = false) {
+    const requestedAt = nowIso();
+    await patchMeta({
+      inventory: {
+        status: 'requested',
+        phase: 'queued',
+        force_requested: force === true,
+        requested_at: requestedAt,
+        updated_at: requestedAt,
+        last_error: null
+      }
+    });
+    return { requested: true, force: force === true, requested_at: requestedAt };
+  }
+
   async function getDashboardState() {
-    const [registry, config, metaData] = await Promise.all([
+    const [registry, config, meta] = await Promise.all([
       readRegistry(),
       readConfig(),
-      chrome.storage.local.get(META_KEY)
+      readMeta()
     ]);
     return {
       engine_version: engine.ENGINE_VERSION,
       registry,
       config,
-      meta: metaData?.[META_KEY] || null
+      meta
     };
   }
 
@@ -162,6 +213,7 @@
       case 'resetDecision': return resetDecision(String(message.id || ''));
       case 'removeRecord': return removeRecord(String(message.id || ''));
       case 'saveConfig': return saveConfig(message.config || {});
+      case 'startFullScan': return startFullScan(message.force === true);
       default: throw new Error('Unsupported request.');
     }
   }
@@ -180,7 +232,12 @@
       lastRequestId = message.request_id;
       Promise.resolve(handle(message))
         .then(result => emitReply({ source: BRIDGE_SOURCE, request_id: message.request_id, ok: true, result }))
-        .catch(error => emitReply({ source: BRIDGE_SOURCE, request_id: message.request_id, ok: false, error: String(error?.message || error) }));
+        .catch(error => emitReply({
+          source: BRIDGE_SOURCE,
+          request_id: message.request_id,
+          ok: false,
+          error: String(error?.message || error)
+        }));
     } catch (_) {}
   }
 
