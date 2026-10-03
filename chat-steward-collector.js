@@ -431,19 +431,41 @@
   async function fetchConversationDetail(headers, conversationId) {
     const encoded = encodeURIComponent(conversationId);
     const candidates = [
-      `/backend-api/conversations/${encoded}?include_has_versions=true&num_turns=100`,
-      `/backend-api/conversation/${encoded}`
+      `/backend-api/conversation/${encoded}`,
+      `/backend-api/conversations/${encoded}?include_has_versions=true&num_turns=100`
     ];
     let lastError = null;
-    for (const path of candidates) {
-      try {
-        return await fetchJson(path, headers, { maxAttempts: 3 });
-      } catch (error) {
-        lastError = error;
-        if (error instanceof HttpError && [400, 404, 405].includes(error.status)) continue;
-        throw error;
+
+    for (let cycle = 0; cycle < 3; cycle++) {
+      let rateLimited = 0;
+      for (const path of candidates) {
+        try {
+          return await fetchJson(path, headers, { maxAttempts: 1 });
+        } catch (error) {
+          lastError = error;
+          if (error instanceof HttpError && [400, 404, 405].includes(error.status)) continue;
+          if (error instanceof HttpError && error.status === 429) {
+            rateLimited++;
+            continue;
+          }
+          throw error;
+        }
       }
+
+      if (rateLimited > 0 && cycle < 2) {
+        const wait = cycle === 0 ? 60000 : 120000;
+        await patchInventoryProgress({
+          status: 'backoff',
+          last_error: `Both detail endpoints rate-limited; retry in ${Math.round(wait / 1000)}s`,
+          backoff_until: new Date(Date.now() + wait).toISOString(),
+          detail_endpoint_cycle: cycle + 1
+        });
+        await sleep(wait);
+        continue;
+      }
+      break;
     }
+
     throw lastError || new Error('Conversation detail unavailable.');
   }
 
@@ -563,6 +585,69 @@
       return `https://chatgpt.com/g/${encodeURIComponent(meta.project.id)}/c/${encodeURIComponent(meta.id)}`;
     }
     return `https://chatgpt.com/c/${encodeURIComponent(meta.id)}`;
+  }
+
+  function buildPendingRecord(meta, existing) {
+    if (existing?.analysis_state === 'DONE') {
+      return {
+        ...existing,
+        title: meta.title || existing.title,
+        url: conversationUrl(meta),
+        last_seen_at: nowIso(),
+        remote_create_time: toIsoish(meta.create_time) || existing.remote_create_time || null,
+        remote_update_time: toIsoish(meta.update_time) || existing.remote_update_time || null,
+        archived: meta.archived === true,
+        chatgpt_project: meta.project || existing.chatgpt_project || null
+      };
+    }
+    return {
+      id: `chat:${meta.id}`,
+      conversation_id: meta.id,
+      title: meta.title,
+      url: conversationUrl(meta),
+      source: 'full-inventory',
+      first_seen_at: existing?.first_seen_at || nowIso(),
+      last_seen_at: nowIso(),
+      remote_create_time: toIsoish(meta.create_time),
+      remote_update_time: toIsoish(meta.update_time),
+      archived: meta.archived === true,
+      chatgpt_project: meta.project || null,
+      message_count: existing?.message_count || 0,
+      analysis_state: existing?.analysis_state === 'ERROR' ? 'ERROR' : 'PENDING',
+      analysis_error: existing?.analysis_error || null,
+      suggestion: existing?.suggestion || null,
+      duplicate_of: existing?.duplicate_of || null,
+      decision: existing?.decision || {
+        status: null,
+        project: null,
+        note: '',
+        decided_at: null
+      }
+    };
+  }
+
+  async function seedInventoryRegistry(conversations) {
+    const registry = await readRegistry();
+    let pendingCount = 0;
+    for (const meta of conversations) {
+      const id = `chat:${meta.id}`;
+      const next = buildPendingRecord(meta, registry.records[id] || null);
+      registry.records[id] = next;
+      if (next.analysis_state !== 'DONE') pendingCount++;
+    }
+    registry.schema_version = 1;
+    registry.engine_version = engine.ENGINE_VERSION;
+    registry.updated_at = nowIso();
+    registry.records = trimRegistry(registry.records);
+    await chrome.storage.local.set({ [REGISTRY_KEY]: registry });
+    await patchMeta({
+      record_count: Object.keys(registry.records).length,
+      inventory: {
+        pending: pendingCount,
+        registry_seeded_at: nowIso()
+      }
+    });
+    return registry;
   }
 
   async function buildInventoryRecord(meta, raw, config, existing, duplicatePool) {
@@ -697,18 +782,22 @@
       const headers = await getSessionHeaders();
       const discovery = await discoverAll(headers, config);
       const conversations = discovery.conversations;
+      const startingRegistry = await seedInventoryRegistry(conversations);
 
       await patchInventoryProgress({
         status: 'running',
         phase: 'analyze',
         discovered: conversations.length,
+        pending: conversations.filter(meta => {
+          const record = startingRegistry.records[`chat:${meta.id}`];
+          return record?.analysis_state !== 'DONE';
+        }).length,
         root_count: discovery.rootCount,
         archived_count: discovery.archivedCount,
         project_count: discovery.projectCount,
         project_chat_count: discovery.projectChatCount
       });
 
-      const startingRegistry = await readRegistry();
       const duplicatePool = Object.values(startingRegistry.records || {});
       const existingById = startingRegistry.records || {};
 

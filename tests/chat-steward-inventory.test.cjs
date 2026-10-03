@@ -21,8 +21,14 @@ assert.match(collector, /status: 'backoff'/);
 assert.match(collector, /DETAIL_DELAY_MS = 1800/);
 assert.match(collector, /MAX_RECORDS = 10000/);
 assert.match(collector, /autoFullInventory/);
+assert.match(collector, /function buildPendingRecord\(/);
+assert.match(collector, /async function seedInventoryRegistry\(/);
+assert.match(collector, /analysis_state: existing\?\.analysis_state === 'ERROR' \? 'ERROR' : 'PENDING'/);
+assert.match(collector, /const startingRegistry = await seedInventoryRegistry\(conversations\)/);
+assert.match(collector, /Both detail endpoints rate-limited/);
+assert.match(collector, /fetchJson\(path, headers, \{ maxAttempts: 1 \}\)/);
 assert.match(bridge, /case 'startFullScan'/);
-assert.equal(manifest.version, '1.9.3');
+assert.equal(manifest.version, '1.9.4');
 assert.ok(manifest.permissions.includes('unlimitedStorage'));
 
 console.log('chat-steward full inventory static tests: PASS');

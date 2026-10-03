@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Continuity Manager",
-  "version": "1.9.3",
-  "description": "Local continuity and Chat Steward tools for ChatGPT: recovery, handoff, resilient throttled full-history inventory, lifecycle review, and human-gated organization.",
+  "version": "1.9.4",
+  "description": "Local continuity and Chat Steward tools for ChatGPT: full inventory seeding, resilient detail analysis, lifecycle review, and human-gated organization.",
   "host_permissions": [
     "https://chatgpt.com/*"
   ],
