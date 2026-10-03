@@ -80,3 +80,13 @@ Priority:
 4. keep all external authority delegated to UAIOS.
 
 Do not implement direct n8n/GitHub/Cloudflare control surfaces here merely because they are technically possible.
+
+
+## Phase 3C — Chat Steward lifecycle review
+- Add local lifecycle classifier for visited/imported conversations.
+- Store derived registry summaries only; do not retain raw message bodies.
+- Separate AI suggestion from human decision.
+- Expose a tightly-scoped GitHub Pages control center through an extension storage bridge.
+- Keep ChatGPT deletion and Project movement manual/human-gated.
+
+Acceptance: opened/imported chats receive one of CONTINUE / REFERENCE / PROJECT / DELETE_CANDIDATE, the dashboard can review and override locally, and no conversation content is uploaded to GitHub.
