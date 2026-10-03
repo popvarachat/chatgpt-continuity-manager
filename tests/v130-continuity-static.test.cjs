@@ -11,7 +11,7 @@ const safeReload = fs.readFileSync(path.join(root, 'scripts', 'reload-extension-
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8').replace(/^\uFEFF/, ''));
 
 assert.match(source, /@version\s+1\.8\.9/);
-assert.equal(manifest.version, '1.9.3');
+assert.equal(manifest.version, '1.9.4');
 assert.deepEqual(manifest.permissions, ['storage', 'tabs', 'unlimitedStorage']);
 assert.equal(manifest.background.service_worker, 'background.js');
 assert.equal(manifest.content_scripts[0].world, 'ISOLATED');
