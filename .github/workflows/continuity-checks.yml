@@ -29,6 +29,8 @@ jobs:
           node tests/v130-continuity-static.test.cjs
           node tests/project-state-autopilot-v2.test.cjs
           node tests/recovery-import-v180.test.cjs
+          node tests/rate-limit-v182.test.cjs
+          node tests/smart-auto-handoff-v183.test.cjs
           node tests/chat-steward-engine.test.cjs
       - name: Manifest parse
         run: node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"

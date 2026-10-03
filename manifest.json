@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ChatGPT Continuity Manager",
   "version": "1.9.0",
-  "description": "Local continuity and Chat Steward tools for ChatGPT: recovery, handoff, lifecycle review, and human-gated organization.",
+  "description": "Local continuity and Chat Steward tools for ChatGPT: recovery, handoff, lifecycle review, human-gated organization, and v1.8.9 smart handoff improvements.",
   "host_permissions": [
     "https://chatgpt.com/*"
   ],
