@@ -11,7 +11,7 @@
   const INVENTORY_REFRESH_HOURS = 24;
   const LIST_LIMIT = 28;
   const FETCH_TIMEOUT_MS = 20000;
-  const DETAIL_DELAY_MS = 500;
+  const DETAIL_DELAY_MS = 1800;
   const INVENTORY_LOCK_STALE_MS = 120000;
   const BATCH_FLUSH_SIZE = 10;
 
@@ -297,7 +297,7 @@
           retryAfterMs(res)
         );
         if (res.status === 429 && attempt + 1 < maxAttempts) {
-          const wait = error.retryAfterMs || Math.min(60000, 10000 * Math.pow(2, attempt));
+          const wait = Math.max(error.retryAfterMs || 0, Math.min(120000, 60000 * Math.pow(2, attempt)));
           await patchInventoryProgress({
             status: 'backoff',
             last_error: `429 rate limit; retry in ${Math.round(wait / 1000)}s`,

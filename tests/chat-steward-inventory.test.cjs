@@ -18,11 +18,11 @@ assert.match(collector, /\/backend-api\/gizmos\/\$\{encodeURIComponent\(project\
 assert.match(collector, /include_has_versions=true&num_turns=100/);
 assert.match(collector, /\/backend-api\/conversation\/\$\{encoded\}/);
 assert.match(collector, /status: 'backoff'/);
-assert.match(collector, /DETAIL_DELAY_MS = 500/);
+assert.match(collector, /DETAIL_DELAY_MS = 1800/);
 assert.match(collector, /MAX_RECORDS = 10000/);
 assert.match(collector, /autoFullInventory/);
 assert.match(bridge, /case 'startFullScan'/);
-assert.equal(manifest.version, '1.9.2');
+assert.equal(manifest.version, '1.9.3');
 assert.ok(manifest.permissions.includes('unlimitedStorage'));
 
 console.log('chat-steward full inventory static tests: PASS');
