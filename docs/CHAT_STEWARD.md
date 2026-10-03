@@ -71,9 +71,13 @@ Project matching is configurable from the dashboard and is stored locally. Publi
 
 ## Coverage model
 
-Automatic scanning covers conversations the user opens while the extension is enabled. This is deliberate: the extension does not enumerate the user's hidden ChatGPT history through undocumented bulk APIs.
+Version 1.9.1 adds a **Full Inventory** pass before ongoing monitoring. When ChatGPT is open and the extension is enabled, Chat Steward uses the user's existing ChatGPT browser session in read-only mode to enumerate available conversations, including archived conversations and Project conversations where available, then fetches conversation detail in a rate-limited batch for local classification.
 
-For historical backlog review, use **Import JSON** on the dashboard with one or more Handoff JSON files from Continuity Manager, or a ChatGPT export JSON containing conversation objects. Imported conversations are classified locally one at a time and only derived registry records are retained.
+The scan is incremental. A completed record is skipped when its remote update timestamp has not changed, while new or changed conversations are re-analyzed. The scanner uses bounded concurrency, delay, 429 backoff, retry state, and a single-owner local lock so multiple ChatGPT tabs do not create duplicate crawlers.
+
+The browser extension retains only derived lifecycle registry records after classification. Raw conversation bodies are not persisted in the Chat Steward registry or uploaded to GitHub.
+
+**Import JSON** remains a fallback and disaster-recovery path if ChatGPT changes an internal read endpoint or if the user wants to audit a historical export independently.
 
 ## Storage keys
 
