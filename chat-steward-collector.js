@@ -9,7 +9,8 @@
   const URL_POLL_MS = 2500;
   const INVENTORY_POLL_MS = 15000;
   const INVENTORY_REFRESH_HOURS = 24;
-  const LIST_LIMIT = 100;
+  const LIST_LIMIT = 28;
+  const FETCH_TIMEOUT_MS = 20000;
   const DETAIL_DELAY_MS = 500;
   const INVENTORY_LOCK_STALE_MS = 120000;
   const BATCH_FLUSH_SIZE = 10;
@@ -238,19 +239,52 @@
     return Number.isFinite(at) ? Math.max(0, at - Date.now()) : 0;
   }
 
+  function observedConversationListUrl(archived) {
+    const entries = performance.getEntriesByType('resource').slice().reverse();
+    for (const entry of entries) {
+      try {
+        const url = new URL(entry.name, location.origin);
+        if (url.origin !== location.origin || url.pathname !== '/backend-api/conversations') continue;
+        const value = url.searchParams.get('is_archived');
+        if (archived === true && value !== 'true') continue;
+        if (archived === false && value === 'true') continue;
+        return url;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  function buildConversationListPath(offset, archived) {
+    const observed = observedConversationListUrl(archived);
+    const url = observed
+      ? new URL(observed.href)
+      : new URL('/backend-api/conversations', location.origin);
+    url.searchParams.set('offset', String(offset));
+    url.searchParams.set('limit', String(LIST_LIMIT));
+    if (!url.searchParams.has('order')) url.searchParams.set('order', 'updated');
+    if (archived === null) url.searchParams.delete('is_archived');
+    else url.searchParams.set('is_archived', archived ? 'true' : 'false');
+    return url.pathname + '?' + url.searchParams.toString();
+  }
+
   async function fetchJson(path, headers, options = {}) {
     const maxAttempts = options.maxAttempts ?? 4;
     const allowStatuses = new Set(options.allowStatuses || []);
+    const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
     let lastError = null;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const res = await fetch(new URL(path, location.origin).href, {
           method: 'GET',
           headers,
           credentials: 'include',
-          cache: 'no-store'
+          cache: 'no-store',
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
         if (allowStatuses.has(res.status)) {
           return { __allowed_status: res.status };
         }
@@ -278,12 +312,23 @@
         }
         throw error;
       } catch (error) {
-        lastError = error;
+        clearTimeout(timeoutId);
+        if (error?.name === 'AbortError') {
+          lastError = new Error(`Timeout after ${timeoutMs}ms for ${path}`);
+          await patchInventoryProgress({
+            last_error: lastError.message,
+            request_timeout_at: nowIso()
+          });
+        } else {
+          lastError = error;
+        }
         if (error instanceof HttpError) throw error;
         if (attempt + 1 < maxAttempts) {
           await sleep(Math.min(10000, 1500 * Math.pow(2, attempt)));
           continue;
         }
+      } finally {
+        clearTimeout(timeoutId);
       }
     }
     throw lastError || new Error(`Failed to fetch ${path}`);
@@ -293,25 +338,29 @@
     const out = [];
     let offset = 0;
     for (let page = 0; page < 500; page++) {
-      let order = 'updated';
+      const phase = archived === true ? 'discover_archived' : 'discover_root';
+      await patchInventoryProgress({
+        phase,
+        list_page: page + 1,
+        list_scanned: out.length,
+        current_request: buildConversationListPath(offset, archived)
+      });
+
       let data = null;
-      const extra = archived === null ? '' : `&is_archived=${archived ? 'true' : 'false'}`;
+      let path = buildConversationListPath(offset, archived);
       try {
-        data = await fetchJson(
-          `/backend-api/conversations?offset=${offset}&limit=${LIST_LIMIT}&order=${order}${extra}`,
-          headers
-        );
+        data = await fetchJson(path, headers);
       } catch (error) {
         if (error instanceof HttpError && error.status === 400) {
-          order = 'updated_at';
-          data = await fetchJson(
-            `/backend-api/conversations?offset=${offset}&limit=${LIST_LIMIT}&order=${order}${extra}`,
-            headers
-          );
+          const url = new URL(path, location.origin);
+          url.searchParams.set('order', 'updated_at');
+          path = url.pathname + '?' + url.searchParams.toString();
+          data = await fetchJson(path, headers);
         } else {
           throw error;
         }
       }
+
       const items = extractItems(data);
       for (const item of items) {
         const meta = normalizeListItem(item, { archived });
@@ -319,6 +368,15 @@
       }
       const total = Number(data?.total);
       offset += items.length;
+
+      await patchInventoryProgress({
+        phase,
+        list_page: page + 1,
+        list_scanned: out.length,
+        list_total: Number.isFinite(total) ? total : null,
+        current_request: null
+      });
+
       if (!items.length) break;
       if (Number.isFinite(total) && offset >= total) break;
       if (items.length < LIST_LIMIT) break;
@@ -406,7 +464,7 @@
     const discovered = new Map();
 
     await patchInventoryProgress({ phase: 'discover_root', discovered: 0 });
-    const root = await listRootConversations(headers, null);
+    const root = await listRootConversations(headers, false);
     for (const meta of root) discovered.set(meta.id, mergeMeta(discovered.get(meta.id), meta));
 
     let archived = [];
