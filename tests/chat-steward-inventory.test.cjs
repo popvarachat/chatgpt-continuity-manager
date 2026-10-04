@@ -8,7 +8,7 @@ const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
 assert.match(collector, /new URL\('\/backend-api\/conversations'/);
 assert.match(collector, /LIST_LIMIT = 28/);
 assert.match(collector, /FETCH_TIMEOUT_MS = 20000/);
-assert.match(collector, /function observedConversationListUrl\(/);
+assert.doesNotMatch(collector, /function observedConversationListUrl\(/);
 assert.match(collector, /function buildConversationListPath\(/);
 assert.match(collector, /new AbortController\(\)/);
 assert.match(collector, /signal: controller\.signal/);
@@ -28,7 +28,7 @@ assert.match(collector, /const startingRegistry = await seedInventoryRegistry\(c
 assert.match(collector, /Both detail endpoints rate-limited/);
 assert.match(collector, /fetchJson\(path, headers, \{ maxAttempts: 1 \}\)/);
 assert.match(bridge, /case 'startFullScan'/);
-assert.equal(manifest.version, '1.9.4');
+assert.equal(manifest.version, '1.9.5');
 assert.ok(manifest.permissions.includes('unlimitedStorage'));
 
 console.log('chat-steward full inventory static tests: PASS');

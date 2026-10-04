@@ -239,29 +239,11 @@
     return Number.isFinite(at) ? Math.max(0, at - Date.now()) : 0;
   }
 
-  function observedConversationListUrl(archived) {
-    const entries = performance.getEntriesByType('resource').slice().reverse();
-    for (const entry of entries) {
-      try {
-        const url = new URL(entry.name, location.origin);
-        if (url.origin !== location.origin || url.pathname !== '/backend-api/conversations') continue;
-        const value = url.searchParams.get('is_archived');
-        if (archived === true && value !== 'true') continue;
-        if (archived === false && value === 'true') continue;
-        return url;
-      } catch (_) {}
-    }
-    return null;
-  }
-
   function buildConversationListPath(offset, archived) {
-    const observed = observedConversationListUrl(archived);
-    const url = observed
-      ? new URL(observed.href)
-      : new URL('/backend-api/conversations', location.origin);
+    const url = new URL('/backend-api/conversations', location.origin);
     url.searchParams.set('offset', String(offset));
     url.searchParams.set('limit', String(LIST_LIMIT));
-    if (!url.searchParams.has('order')) url.searchParams.set('order', 'updated');
+    url.searchParams.set('order', 'updated');
     if (archived === null) url.searchParams.delete('is_archived');
     else url.searchParams.set('is_archived', archived ? 'true' : 'false');
     return url.pathname + '?' + url.searchParams.toString();
